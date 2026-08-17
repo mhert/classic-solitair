@@ -27,7 +27,7 @@ use crate::error::AppError;
 use crate::geometry;
 use crate::menu::MenuModel;
 use crate::options::EditedOptions;
-use crate::themes::{self, ThemeEntry};
+use crate::themes::{self, ThemeEntry, ThemeSource};
 
 /// Entropy for "Deal": wall-clock nanoseconds folded into a [`Seed`]. The
 /// presenter takes seeds from its host because the core crates never
@@ -293,7 +293,7 @@ impl App {
             if theme_list.iter().all(|entry| entry.id != id) {
                 theme_list.push(ThemeEntry {
                     id: id.clone(),
-                    path,
+                    source: ThemeSource::Path(path),
                 });
             }
             (theme, id)

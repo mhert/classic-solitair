@@ -16,13 +16,22 @@ use sol_theme::{Theme, ThemeError};
 /// see [`discover_among`].
 pub const DEFAULT_THEME_ZIP: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/default-theme.zip"));
 
-/// One selectable theme: its session id and its package location.
+/// Where a theme package's bytes come from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ThemeSource {
+    /// A directory or `.zip` file on disk.
+    Path(PathBuf),
+    /// The default theme baked into the binary ([`DEFAULT_THEME_ZIP`]).
+    Embedded,
+}
+
+/// One selectable theme: its session id and where its package lives.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThemeEntry {
     /// The session-visible theme id.
     pub id: String,
-    /// Where the package lives: a directory, or a `.zip` file.
-    pub path: PathBuf,
+    /// Where the package's bytes come from.
+    pub source: ThemeSource,
 }
 
 /// Errors from resolving or loading a theme by id.
@@ -96,19 +105,26 @@ pub fn discover() -> Vec<ThemeEntry> {
 /// name.
 #[must_use]
 pub fn discover_among(default_candidates: &[PathBuf]) -> Vec<ThemeEntry> {
+    discover_within(default_candidates, user_theme_dir())
+}
+
+/// [`discover_among`] with the user theme directory injected, so both the
+/// on-disk and embedded default branches are decidable in a test.
+#[must_use]
+fn discover_within(default_candidates: &[PathBuf], user_dir: Option<PathBuf>) -> Vec<ThemeEntry> {
     let mut entries = Vec::new();
-    let user_dir = user_theme_dir();
-    if let Some(path) = dev_default_dir_among(default_candidates).or_else(|| {
-        user_dir
-            .as_ref()
-            .map(|dir| dir.join("default"))
-            .filter(|path| path.is_dir())
-    }) {
-        entries.push(ThemeEntry {
-            id: String::from("default"),
-            path,
-        });
-    }
+    let default_source = dev_default_dir_among(default_candidates)
+        .or_else(|| {
+            user_dir
+                .as_ref()
+                .map(|dir| dir.join("default"))
+                .filter(|path| path.is_dir())
+        })
+        .map_or(ThemeSource::Embedded, ThemeSource::Path);
+    entries.push(ThemeEntry {
+        id: String::from("default"),
+        source: default_source,
+    });
 
     if let Some(dir) = user_dir {
         entries.extend(packages_in(&dir, &entries));
@@ -134,7 +150,10 @@ fn packages_in(dir: &Path, known: &[ThemeEntry]) -> Vec<ThemeEntry> {
             known
                 .iter()
                 .all(|entry| entry.id != id)
-                .then_some(ThemeEntry { id, path })
+                .then_some(ThemeEntry {
+                    id,
+                    source: ThemeSource::Path(path),
+                })
         })
         .collect();
     found.sort_by(|a, b| a.id.cmp(&b.id));
@@ -163,7 +182,11 @@ pub fn load(entries: &[ThemeEntry], id: &str) -> Result<Theme, ThemeLookupError>
             id: String::from(id),
         }
     })?;
-    Theme::load_path(&entry.path).map_err(|source| ThemeLookupError::Load {
+    let loaded = match &entry.source {
+        ThemeSource::Path(path) => Theme::load_path(path),
+        ThemeSource::Embedded => Theme::load_zip_bytes(DEFAULT_THEME_ZIP),
+    };
+    loaded.map_err(|source| ThemeLookupError::Load {
         id: String::from(id),
         source: Box::new(source),
     })
@@ -171,7 +194,7 @@ pub fn load(entries: &[ThemeEntry], id: &str) -> Result<Theme, ThemeLookupError>
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
     use super::*;
 
@@ -211,7 +234,7 @@ mod tests {
         std::fs::write(dir.path().join("theme.toml"), b"not a manifest").unwrap();
         let entries = vec![ThemeEntry {
             id: String::from("broken"),
-            path: dir.path().to_path_buf(),
+            source: ThemeSource::Path(dir.path().to_path_buf()),
         }];
         assert!(matches!(
             load(&entries, "broken"),
@@ -254,7 +277,7 @@ mod tests {
 
         let known = vec![ThemeEntry {
             id: String::from("default"),
-            path: PathBuf::from("/in/tree"),
+            source: ThemeSource::Path(PathBuf::from("/in/tree")),
         }];
         let ids: Vec<String> = packages_in(dir.path(), &known)
             .into_iter()
@@ -270,21 +293,61 @@ mod tests {
         assert!(packages_in(Path::new("/no/such/directory"), &[]).is_empty());
     }
 
-    /// Without any in-tree candidate, discovery falls back to the installed
-    /// `<data>/themes/default` — the shape a packaged build has.
     #[test]
-    fn discovery_falls_back_to_the_installed_default() {
-        // No candidate exists, so the only "default" that could appear is
-        // the installed one; on a dev machine there is none, and discovery
-        // must then simply offer no default rather than inventing one.
-        let entries = discover_among(&[PathBuf::from("/no/such/dir")]);
-        let installed = user_theme_dir().map(|dir| dir.join("default"));
-        let expected = installed.is_some_and(|path| path.is_dir());
+    fn discover_within_prefers_a_dev_candidate() {
+        let dev = tempfile::tempdir().unwrap();
+        std::fs::write(dev.path().join("theme.toml"), b"").unwrap();
+        let entries = discover_within(&[dev.path().to_path_buf()], None);
         assert_eq!(
-            entries.iter().any(|entry| entry.id == "default"),
-            expected,
-            "a default appears exactly when an installed one exists"
+            entries[0],
+            ThemeEntry {
+                id: String::from("default"),
+                source: ThemeSource::Path(dev.path().to_path_buf())
+            }
         );
+    }
+
+    #[test]
+    fn discover_within_uses_the_user_default_when_no_dev_candidate() {
+        let user = tempfile::tempdir().unwrap();
+        let default = user.path().join("default");
+        std::fs::create_dir(&default).unwrap();
+        std::fs::write(default.join("theme.toml"), b"").unwrap();
+        let entries = discover_within(
+            &[PathBuf::from("/no/such/dir")],
+            Some(user.path().to_path_buf()),
+        );
+        assert_eq!(entries[0].source, ThemeSource::Path(default));
+    }
+
+    #[test]
+    fn discover_within_falls_back_to_embedded_when_nothing_is_on_disk() {
+        // No dev candidate, and a user dir with no `default` package.
+        let user = tempfile::tempdir().unwrap();
+        let entries = discover_within(
+            &[PathBuf::from("/no/such/dir")],
+            Some(user.path().to_path_buf()),
+        );
+        assert_eq!(
+            entries[0],
+            ThemeEntry {
+                id: String::from("default"),
+                source: ThemeSource::Embedded
+            }
+        );
+
+        // And with no user dir at all.
+        let entries = discover_within(&[PathBuf::from("/no/such/dir")], None);
+        assert_eq!(entries[0].source, ThemeSource::Embedded);
+    }
+
+    #[test]
+    fn load_uses_the_embedded_bytes_for_an_embedded_default_entry() {
+        let entries = vec![ThemeEntry {
+            id: String::from("default"),
+            source: ThemeSource::Embedded,
+        }];
+        assert!(load(&entries, "default").is_ok());
     }
 
     #[test]
