@@ -27,8 +27,10 @@
 //!   theme, a bad input frame, or another I/O failure. The full error
 //!   chain — which asset or frame, and why — goes to stderr.
 //! - `2` — a usage error: missing or unknown arguments, no subcommand, or
-//!   an unrecognized subcommand (`clap`'s default).
+//!   an unrecognized subcommand (`clap`'s default); or `extract --animate`
+//!   given a loose-directory input.
 
+mod animate;
 mod bytes;
 pub mod cli;
 pub mod dib;
@@ -41,6 +43,7 @@ pub mod pack_strip;
 pub mod pe;
 pub mod raster;
 pub mod resource;
+mod strip;
 pub mod validate;
 
 #[cfg(test)]
@@ -77,7 +80,7 @@ pub use resource::{ContainerBitmaps, ResourceBitmap};
 /// [`validate::run`], and [`pack_strip::run`] respectively.
 pub fn run(command: Command) -> Result<String, ToolError> {
     match command {
-        Command::Extract(args) => Ok(extract::run(&args.input, &args.output)?),
+        Command::Extract(args) => Ok(extract::run(&args.input, &args.output, args.animate)?),
         Command::Validate(args) => Ok(validate::run(&args.theme)?),
         Command::PackStrip(args) => Ok(pack_strip::run(&args.frames, &args.output, args.fps)?),
     }

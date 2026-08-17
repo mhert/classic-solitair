@@ -10,7 +10,8 @@ use clap::{Args, Parser, Subcommand};
 ///
 /// Exit codes: `0` success, `1` the requested operation failed (see each
 /// subcommand's help), `2` a usage error (missing/unknown arguments, no
-/// subcommand, or an unrecognized subcommand).
+/// subcommand, an unrecognized subcommand, or `extract --animate` given a
+/// loose-directory input).
 #[derive(Debug, Parser)]
 #[command(name = "soltool", version, about)]
 pub struct Cli {
@@ -27,9 +28,12 @@ pub enum Command {
     /// `<input>` is sniffed by content: an NE (Win16) or PE (Win32)
     /// executable/DLL whose card bitmaps live in resources, or a directory of
     /// already-extracted loose `.bmp`/`.png` bitmaps. Resource backs are
-    /// always static; for a loose directory, frame-numbered files
-    /// (`<stem>_0`, `<stem>_1`, …, contiguous from 0, same size) are packed
-    /// into one animated strip back at 2 fps.
+    /// static by default; `--animate` reconstructs the original's four
+    /// animated backs from the file's own overlay-sprite resources instead.
+    /// For a loose directory, frame-numbered files (`<stem>_0`, `<stem>_1`,
+    /// …, contiguous from 0, same size) are already packed into one animated
+    /// strip back at 2 fps, so `--animate` on a loose directory is a usage
+    /// error (exit 2) rather than a silent no-op.
     ///
     /// Writes `theme.toml`, `cards/*.png`, and `backs/*.png` under
     /// `<theme-dir>` (which must be empty or absent — never overwritten),
@@ -71,6 +75,12 @@ pub struct ExtractArgs {
     /// refused if it already exists and is not empty.
     #[arg(short = 'o', long = "output")]
     pub output: PathBuf,
+    /// Reconstructs the original's animated card backs from the file's own
+    /// overlay-sprite resources (resource inputs only; frames derived from
+    /// the original's animation code; the existing local-use notice covers
+    /// the strips).
+    #[arg(long)]
+    pub animate: bool,
 }
 
 /// Arguments for `soltool validate`.

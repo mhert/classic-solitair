@@ -84,3 +84,28 @@ fn extract_a_missing_input_exits_1_with_a_message_on_stderr() {
     assert!(result.stdout.is_empty());
     assert!(!result.stderr.is_empty());
 }
+
+#[test]
+fn extract_animate_on_a_loose_directory_is_a_usage_error_that_exits_2() {
+    let tmp = tempfile::tempdir().unwrap();
+    let input = tmp.path().join("assets");
+    std::fs::create_dir(&input).unwrap();
+    write_faces(&input);
+    let output = tmp.path().join("theme");
+
+    let result = common::run(
+        tmp.path(),
+        &[
+            "extract",
+            input.to_str().unwrap(),
+            "-o",
+            output.to_str().unwrap(),
+            "--animate",
+        ],
+    );
+    assert_eq!(result.status.code(), Some(2));
+    assert!(result.stdout.is_empty());
+    let stderr = String::from_utf8(result.stderr).unwrap();
+    assert!(stderr.contains("--animate"), "{stderr}");
+    assert!(!output.exists());
+}

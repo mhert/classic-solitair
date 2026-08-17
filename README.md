@@ -27,11 +27,15 @@ GPL-3.0-or-later.
 
 The asset extraction and theme authoring CLI. Subcommands:
 
-- `extract <sol.exe | cards.dll | dir-of-bitmaps> -o <theme-dir>` — pull card
-  bitmaps from your own local Windows assets into a `render_mode = "png"`
-  theme. **Output is for your local use only — the original artwork must never
-  be redistributed or committed** (the tool reads local files only; it never
-  downloads or ships them).
+- `extract <sol.exe | cards.dll | dir-of-bitmaps> -o <theme-dir> [--animate]` —
+  pull card bitmaps from your own local Windows assets into a
+  `render_mode = "png"` theme. **Output is for your local use only — the
+  original artwork must never be redistributed or committed** (the tool reads
+  local files only; it never downloads or ships them). `--animate`
+  reconstructs the four animated card backs from the resource file's own
+  overlay sprites; it takes a resource input only, and is a usage error on a
+  loose directory, which already packs frame-numbered files into strips
+  itself.
 - `validate <theme>` — lint a theme package against the theme format rules;
   non-zero exit on failure.
 - `pack-strip <frame files…> -o <strip.png> --fps <n>` — pack loose frames into

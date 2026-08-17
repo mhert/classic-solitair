@@ -7,7 +7,7 @@
 //! exercise by spawning this binary.
 
 use clap::Parser as _;
-use soltool::Cli;
+use soltool::{Cli, ExtractError, ToolError};
 
 fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
@@ -18,7 +18,11 @@ fn main() -> std::process::ExitCode {
         }
         Err(error) => {
             eprintln!("{error}");
-            std::process::ExitCode::from(1)
+            let code = match &error {
+                ToolError::Extract(ExtractError::AnimateRequiresResourceInput) => 2,
+                _ => 1,
+            };
+            std::process::ExitCode::from(code)
         }
     }
 }

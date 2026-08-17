@@ -27,8 +27,15 @@
 //! static back `back_<id>` — except the three the original reuses for pile
 //! slots rather than for cards, which become `[placeholders]` instead (see
 //! below). Differently-sized bitmaps are skipped and listed. NE/PE
-//! resources yield only *static* backs: the original stores animation
-//! frames in code, not as strip resources.
+//! resources yield only *static* backs by default: the original stores
+//! animation frames in code, not as strip resources. `--animate` diverts the
+//! seven overlay-sprite resource ids ([`crate::animate::sprite_ids`]) out of
+//! that classification entirely and instead reconstructs the four backs the
+//! original code animates (ids 56/63/64/65) into timed strips composed from
+//! those sprites ([`crate::animate`]); a recipe back whose sprites are
+//! missing degrades to static rather than failing the whole extraction.
+//! Loose directories animate differently, via frame-numbered stems, and
+//! reject `--animate` outright (they already encode their own animation).
 //!
 //! # Placeholders (resource inputs only)
 //!
@@ -77,6 +84,7 @@ use sol_theme::{
 /// The 52 card faces in canonical order, each paired with its decoded image.
 type Faces = Vec<(FaceSuit, FaceRank, RasterImage)>;
 
+use crate::animate;
 use crate::bytes::read_u32_le;
 use crate::dib;
 use crate::manifest_writer::{self, ThemeDoc};
@@ -87,7 +95,9 @@ use crate::pe::{self, PeError};
 use crate::raster::{self, RasterImage};
 use crate::resource::{ContainerBitmaps, ResourceBitmap};
 
-/// Default animation rate for a detected loose-frame strip back.
+/// Default animation rate for a strip back with no explicit per-back timing
+/// (a detected loose-frame strip; every recipe-composed `--animate` strip
+/// instead carries the original's own real timing).
 const DEFAULT_FPS: u32 = 2;
 /// The mandatory local-use notice, printed on every successful run.
 const LOCAL_USE_NOTICE: &str = "output is for your local use only — the original artwork must never be redistributed or committed";
@@ -107,11 +117,15 @@ const PLACEHOLDER_CLEAR_COLOR: [u8; 3] = [0xFF, 0xFF, 0xFF];
 
 /// Extracts the theme at `input` into the directory `output`, returning the
 /// stdout summary (faces, backs, skips, and the local-use notice) on
-/// success.
+/// success. `animate` reconstructs the four animated card backs from a
+/// resource input's own overlay-sprite resources instead of leaving every
+/// back static; it is rejected outright for a loose-directory input, which
+/// already encodes its own animation via frame-numbered files.
 ///
 /// # Errors
 ///
-/// Returns [`ExtractError::OutputNotEmpty`] if
+/// Returns [`ExtractError::AnimateRequiresResourceInput`] if `animate` is
+/// set and `input` is a directory; [`ExtractError::OutputNotEmpty`] if
 /// `output` exists and is not an empty directory;
 /// [`ExtractError::InputUnreadable`], [`ExtractError::NotExecutable`], or
 /// [`ExtractError::UnknownExecutable`] for an unreadable or unrecognized
@@ -119,13 +133,16 @@ const PLACEHOLDER_CLEAR_COLOR: [u8; 3] = [0xFF, 0xFF, 0xFF];
 /// resource container; a face-related variant if the 52 faces are missing,
 /// inconsistent, or ambiguously named; or [`ExtractError::OutputUnwritable`]
 /// if the theme cannot be written.
-pub fn run(input: &Path, output: &Path) -> Result<String, ExtractError> {
+pub fn run(input: &Path, output: &Path, animate: bool) -> Result<String, ExtractError> {
+    if animate && input.is_dir() {
+        return Err(ExtractError::AnimateRequiresResourceInput);
+    }
     ensure_output_available(output)?;
     let name = input_stem(input);
     let mut theme = if input.is_dir() {
         classify_loose(input, name)?
     } else {
-        classify_file(input, name)?
+        classify_file(input, name, animate)?
     };
     cut_corners(&mut theme);
     write_theme(output, theme)
@@ -133,10 +150,10 @@ pub fn run(input: &Path, output: &Path) -> Result<String, ExtractError> {
 
 /// Applies the original's corner cutout ([`raster::cut_card_corners`]) to
 /// every image it draws as a card: the faces, each back — per frame, so a
-/// loose-detected strip is cut frame by frame rather than once across the
-/// whole strip — and the pile slots. Runs on both input kinds, because the
-/// cutout is a property of how the original *draws* a card bitmap, not of
-/// where that bitmap was stored.
+/// composed or loose-detected strip is cut frame by frame rather than once
+/// across the whole strip — and the pile slots. Runs on both input kinds,
+/// because the cutout is a property of how the original *draws* a card
+/// bitmap, not of where that bitmap was stored.
 fn cut_corners(theme: &mut ClassifiedTheme) {
     for (_, _, image) in &mut theme.faces {
         *image = raster::cut_card_corners(image, 1);
@@ -176,13 +193,17 @@ fn output_unwritable(path: &Path, error: &dyn Display) -> ExtractError {
 
 /// Reads and classifies a resource-container file (NE or PE), sniffed by
 /// content.
-fn classify_file(input: &Path, name: String) -> Result<ClassifiedTheme, ExtractError> {
+fn classify_file(
+    input: &Path,
+    name: String,
+    animate: bool,
+) -> Result<ClassifiedTheme, ExtractError> {
     let bytes = std::fs::read(input).map_err(|error| input_unreadable(input, &error))?;
     let bitmaps = match sniff(&bytes)? {
         Container::Ne { header_offset } => ne::extract(&bytes, header_offset)?,
         Container::Pe => pe::extract(&bytes)?,
     };
-    classify_resources(bitmaps, name)
+    classify_resources(bitmaps, name, animate)
 }
 
 // ---------------------------------------------------------------------------
@@ -259,17 +280,33 @@ fn describe_bytes(bytes: &[u8]) -> String {
 // Classification: resources (NE / PE)
 // ---------------------------------------------------------------------------
 
-/// Classifies decoded container bitmaps into 52 faces plus backs, diverting
-/// the three pile-slot bitmaps into placeholders.
+/// Classifies decoded container bitmaps into 52 faces plus backs. Under
+/// `animate`, the overlay-sprite resource ids
+/// ([`animate::sprite_ids`]) are diverted into a sprite map instead of being
+/// classified as faces/backs/skips, and every classified back whose id names
+/// an [`animate::recipe_for`] recipe is composed into a timed strip (or, on
+/// a [`animate::compose_strip`] failure, left static with a degradation
+/// note).
 fn classify_resources(
     bitmaps: ContainerBitmaps,
     name: String,
+    animate: bool,
 ) -> Result<ClassifiedTheme, ExtractError> {
+    let sprite_ids: HashSet<u32> = if animate {
+        crate::animate::sprite_ids().collect()
+    } else {
+        HashSet::new()
+    };
+
     let mut face_candidates = Vec::new();
     let mut back_candidates: Vec<(u32, RasterImage)> = Vec::new();
+    let mut sprites: HashMap<u32, RasterImage> = HashMap::new();
     let mut skips = Vec::new();
     for ResourceBitmap { id, data } in bitmaps.bitmaps {
         match dib::decode_dib(&data) {
+            Ok(image) if sprite_ids.contains(&id) => {
+                sprites.insert(id, image);
+            }
             Ok(image) => match resource_face(id) {
                 Some((suit, rank)) => face_candidates.push((suit, rank, image)),
                 None => back_candidates.push((id, image)),
@@ -289,6 +326,7 @@ fn classify_resources(
     let mut backs = Vec::new();
     let mut placeholders = ClassifiedPlaceholders::default();
     let mut notes = Vec::new();
+    let mut animated_count = 0_u32;
     for (id, image) in back_candidates {
         if (image.width, image.height) != base_size {
             skips.push(format!(
@@ -315,11 +353,27 @@ fn classify_resources(
             continue;
         }
 
-        backs.push(ClassifiedBack {
-            name: format!("back_{id:02}"),
+        let back_name = format!("back_{id:02}");
+        let mut back = ClassifiedBack {
+            name: back_name.clone(),
             image,
             frames: None,
-        });
+            timing: None,
+        };
+        if animate && let Some(recipe) = animate::recipe_for(id) {
+            match animate::compose_strip(&back.image, &sprites, recipe) {
+                Ok(strip) => {
+                    back.image = strip;
+                    back.frames = Some(u32::try_from(recipe.cells.len()).unwrap_or(u32::MAX));
+                    back.timing = Some(animate::timing_for(recipe).into());
+                    animated_count += 1;
+                }
+                Err(reason) => {
+                    notes.push(format!("{back_name} not animated: {reason}"));
+                }
+            }
+        }
+        backs.push(back);
     }
 
     if bitmaps.string_named_skipped > 0 {
@@ -327,6 +381,9 @@ fn classify_resources(
             "{} string-named bitmap resource(s) skipped (only integer-id bitmaps map to cards)",
             bitmaps.string_named_skipped
         ));
+    }
+    if animate && animated_count == 0 {
+        notes.push("no backs were animated".to_owned());
     }
 
     Ok(ClassifiedTheme {
@@ -506,6 +563,7 @@ fn classify_loose_backs(
                 name: pack_strip::sanitize_back_name(&base),
                 image: pack_strip::build_strip(&images),
                 frames: Some(frame_count),
+                timing: None,
             });
         } else {
             // Not a clean 0..n run: keep each frame as its own static back.
@@ -519,6 +577,7 @@ fn classify_loose_backs(
             name: pack_strip::sanitize_back_name(&stem),
             image,
             frames: None,
+            timing: None,
         });
     }
 
@@ -600,11 +659,27 @@ enum FacesError {
 
 /// A classified back: its (valid) name, its single image (a strip is already
 /// assembled), and `Some(frame_count)` for an animated strip or `None` for a
-/// static back.
+/// static back. `timing` is `Some` only for a back `--animate` composed from
+/// a recipe (its real, possibly per-frame timing); every other back —
+/// static, or a loose-directory frame strip — leaves it `None` and falls
+/// back to [`DEFAULT_FPS`] in [`build_doc`].
 struct ClassifiedBack {
     name: String,
     image: RasterImage,
     frames: Option<u32>,
+    timing: Option<BackTiming>,
+}
+
+/// The trivial 1:1 map from [`animate::EmittedTiming`] (this crate's own
+/// vocabulary) to [`sol_theme::BackTiming`] (the theme package's), so a
+/// composed recipe's timing can be handed straight to a [`BackDef::Strip`].
+impl From<animate::EmittedTiming> for BackTiming {
+    fn from(timing: animate::EmittedTiming) -> Self {
+        match timing {
+            animate::EmittedTiming::Fps(fps) => BackTiming::Fps(fps),
+            animate::EmittedTiming::DurationsMs(durations) => BackTiming::DurationsMs(durations),
+        }
+    }
 }
 
 /// A fully classified theme, ready to write.
@@ -672,6 +747,7 @@ fn write_theme(output: &Path, mut theme: ClassifiedTheme) -> Result<String, Extr
             // back, so it must round off against the table the same way.
             image: raster::cut_card_corners(&solid_image(theme.base_size, FALLBACK_BACK_COLOR), 1),
             frames: None,
+            timing: None,
         });
         theme
             .notes
@@ -709,8 +785,10 @@ fn write_theme(output: &Path, mut theme: ClassifiedTheme) -> Result<String, Extr
 /// `render_mode = "png"` theme, a `#008000` table and
 /// `#000000` drag outline (the classic Win98 baize), no author or sounds
 /// (extraction recovers neither). Each classified back becomes a static
-/// entry, or a horizontal strip when it carries a frame count, timed at
-/// [`DEFAULT_FPS`].
+/// entry, or a horizontal strip when it carries a frame count — timed by its
+/// own `timing` if `--animate` composed one, else [`DEFAULT_FPS`], which
+/// keeps every loose-directory and non-recipe strip back byte-identical to
+/// before this back gained a per-back timing override.
 ///
 /// # Errors
 ///
@@ -730,7 +808,7 @@ fn build_doc(theme: &ClassifiedTheme) -> Result<ThemeDoc, ExtractError> {
             Some(frames) => BackDef::Strip {
                 image,
                 frames,
-                timing: BackTiming::Fps(DEFAULT_FPS),
+                timing: back.timing.clone().unwrap_or(BackTiming::Fps(DEFAULT_FPS)),
                 layout: BackLayout::Horizontal,
             },
             None => BackDef::Static { image },
@@ -801,8 +879,9 @@ fn write_png(path: &Path, image: &RasterImage) -> Result<(), ExtractError> {
     std::fs::write(path, bytes).map_err(|error| output_unwritable(path, &error))
 }
 
-/// Builds the stdout summary: face/back counts, backs, recovered
-/// placeholders, any skips and notes, then the mandatory local-use notice.
+/// Builds the stdout summary: face/back counts, backs, which backs
+/// `--animate` turned into strips (if any), any skips and notes, then the
+/// mandatory local-use notice.
 fn build_summary(theme: &ClassifiedTheme) -> String {
     let mut out = String::new();
     let _ = writeln!(
@@ -816,6 +895,15 @@ fn build_summary(theme: &ClassifiedTheme) -> String {
     );
     let names: Vec<&str> = theme.backs.iter().map(|back| back.name.as_str()).collect();
     let _ = writeln!(out, "Backs: {}", names.join(", "));
+    let animated: Vec<&str> = theme
+        .backs
+        .iter()
+        .filter(|back| back.timing.is_some())
+        .map(|back| back.name.as_str())
+        .collect();
+    if !animated.is_empty() {
+        let _ = writeln!(out, "Animated: {}", animated.join(", "));
+    }
     let placeholders: Vec<&str> = theme.placeholders.entries().map(|(key, _)| key).collect();
     if !placeholders.is_empty() {
         let _ = writeln!(out, "Placeholders: {}", placeholders.join(", "));
@@ -885,6 +973,11 @@ pub struct FaceSizeMismatch {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ExtractError {
+    /// `--animate` was given a loose-directory input.
+    #[error(
+        "--animate requires a resource-container input (an NE/PE executable or DLL); a loose directory already encodes its own animation via frame-numbered files"
+    )]
+    AnimateRequiresResourceInput,
     /// The input file (or a loose directory) could not be read.
     #[error("cannot read input {path}: {message}")]
     InputUnreadable {
@@ -972,6 +1065,8 @@ mod tests {
 
     use std::path::PathBuf;
 
+    use sol_theme::Manifest;
+
     use super::*;
     use crate::testkit::asset_path;
     use crate::testkit::{Rsrc, build_ne, build_pe, solid_dib};
@@ -1004,15 +1099,78 @@ mod tests {
         build_ne(0, &[(RT_BITMAP, entries)]).0
     }
 
-    /// Runs `extract` on `bytes` written as a file input, returning the
-    /// temp dir (kept alive), the output path, and the result.
+    /// Runs `extract` on `bytes` written as a file input, without
+    /// `--animate`, returning the temp dir (kept alive), the output path,
+    /// and the result.
     fn run_file(bytes: &[u8]) -> (tempfile::TempDir, PathBuf, Result<String, ExtractError>) {
+        run_file_animate(bytes, false)
+    }
+
+    /// [`run_file`] with an explicit `--animate` value.
+    fn run_file_animate(
+        bytes: &[u8],
+        animate: bool,
+    ) -> (tempfile::TempDir, PathBuf, Result<String, ExtractError>) {
         let dir = tempfile::tempdir().unwrap();
         let input = dir.path().join("input.bin");
         std::fs::write(&input, bytes).unwrap();
         let output = dir.path().join("out");
-        let result = run(&input, &output);
+        let result = run(&input, &output, animate);
         (dir, output, result)
+    }
+
+    /// Real card dimensions (71×96): the size the four animated-back
+    /// recipes' hard-coded blit coordinates are calibrated against (see
+    /// `animate.rs`). The synthetic `W`×`H` above is too small to fit any
+    /// recipe's blits, so every `--animate` fixture below uses this size
+    /// instead.
+    const CARD_W: u32 = 71;
+    const CARD_H: u32 = 96;
+
+    /// The 52 real-sized face resources (ids 1..=52), for `--animate`
+    /// fixtures.
+    fn animate_face_entries() -> Vec<Rsrc> {
+        (1..=52_u32)
+            .map(|id| {
+                let shade = u8::try_from(id).unwrap();
+                Rsrc::Id(id, solid_dib(CARD_W, CARD_H, (shade, 1, 2)))
+            })
+            .collect()
+    }
+
+    /// One recipe back's base resource: `back_id` at the real card size, a
+    /// solid `color` distinct from every sprite color below.
+    fn animate_back_entry(back_id: u32, color: (u8, u8, u8)) -> Rsrc {
+        Rsrc::Id(back_id, solid_dib(CARD_W, CARD_H, color))
+    }
+
+    /// All seven overlay-sprite resources (678..=684) at their true
+    /// dimensions, each a distinct solid color so a composed cell's blit
+    /// region is pixel-distinguishable from its base and from every other
+    /// sprite.
+    fn animate_sprite_entries() -> Vec<Rsrc> {
+        vec![
+            Rsrc::Id(678, solid_dib(32, 22, (200, 0, 0))),
+            Rsrc::Id(679, solid_dib(32, 22, (0, 200, 0))),
+            Rsrc::Id(680, solid_dib(26, 12, (0, 0, 200))),
+            Rsrc::Id(681, solid_dib(14, 12, (200, 200, 0))),
+            Rsrc::Id(682, solid_dib(14, 12, (200, 0, 200))),
+            Rsrc::Id(683, solid_dib(24, 7, (0, 200, 200))),
+            Rsrc::Id(684, solid_dib(24, 7, (100, 100, 100))),
+        ]
+    }
+
+    /// A PE image with the 52 real-sized faces plus `backs` and `sprites`
+    /// resources, for `--animate` fixtures. Uses `build_pe` rather than
+    /// `build_ne`: at 71×96, the ~63 resources these fixtures need push the
+    /// total payload past the byte range `build_ne`'s fixed table/data gap
+    /// can address without corruption, which `build_pe`'s dynamically
+    /// computed layout has no such ceiling for.
+    fn animate_pe_image(backs: Vec<Rsrc>, sprites: Vec<Rsrc>) -> Vec<u8> {
+        let mut entries = animate_face_entries();
+        entries.extend(backs);
+        entries.extend(sprites);
+        build_pe(&[(RT_BITMAP & 0x7FFF, entries)])
     }
 
     /// The RGBA pixel at `(x, y)` in `image`.
@@ -1383,6 +1541,18 @@ mod tests {
     }
 
     #[test]
+    fn a_strip_back_is_cut_frame_by_frame_not_once_across_the_strip() {
+        let backs = vec![animate_back_entry(65, (40, 40, 40))];
+        let image = animate_pe_image(backs, animate_sprite_entries());
+        let (_dir, output, result) = run_file_animate(&image, true);
+        result.unwrap();
+
+        // Four frames: the interior corners of frames 1..3 are only cut if
+        // the pass walks frames rather than the strip's outer bounds.
+        assert_corners_cut(&read_png(&output, "backs/back_65.png"), 4, "back_65");
+    }
+
+    #[test]
     fn the_solid_fallback_back_is_cut_like_any_other_card_image() {
         let (_dir, output, result) = run_file(&ne_image(vec![]));
         result.unwrap();
@@ -1397,10 +1567,295 @@ mod tests {
         write_canonical_faces(&input);
         std::fs::write(input.join("myback.png"), png_bytes(W, H, [7, 7, 7])).unwrap();
         let output = dir.path().join("out");
-        run(&input, &output).unwrap();
+        run(&input, &output, false).unwrap();
 
         assert_corners_cut(&read_png(&output, "cards/spades_01.png"), 1, "face");
         assert_corners_cut(&read_png(&output, "backs/myback.png"), 1, "myback");
+    }
+
+    // -- --animate --
+
+    #[test]
+    fn animate_composes_recipe_backs_into_timed_strips_that_reparse_and_render() {
+        let backs = vec![
+            animate_back_entry(56, (10, 10, 10)), // robot -> Fps(4)
+            animate_back_entry(63, (20, 20, 20)), // castle -> Fps(4)
+            animate_back_entry(64, (30, 30, 30)), // palm -> DurationsMs
+            animate_back_entry(65, (40, 40, 40)), // poker -> DurationsMs
+        ];
+        let image = animate_pe_image(backs, animate_sprite_entries());
+        let (_dir, output, result) = run_file_animate(&image, true);
+        let summary = result.unwrap();
+        crate::validate::run(&output).unwrap();
+
+        for name in ["back_56", "back_63", "back_64", "back_65"] {
+            assert!(summary.contains(name), "{summary}");
+        }
+        assert!(
+            summary.contains("Animated: back_56, back_63, back_64, back_65"),
+            "{summary}"
+        );
+        assert!(!summary.contains("not animated"), "{summary}");
+        assert!(!summary.contains("no backs were animated"), "{summary}");
+
+        let toml = std::fs::read_to_string(output.join("theme.toml")).unwrap();
+        let manifest = Manifest::from_toml_str(&toml).unwrap();
+        let back_def = |name: &str| {
+            manifest
+                .backs
+                .iter()
+                .find(|(back_name, _)| back_name.as_str() == name)
+                .map(|(_, def)| def.clone())
+                .unwrap()
+        };
+
+        assert_eq!(
+            back_def("back_56"),
+            BackDef::Strip {
+                image: asset_path("backs/back_56.png"),
+                frames: 4,
+                timing: BackTiming::Fps(4),
+                layout: BackLayout::Horizontal,
+            }
+        );
+        assert_eq!(
+            back_def("back_63"),
+            BackDef::Strip {
+                image: asset_path("backs/back_63.png"),
+                frames: 2,
+                timing: BackTiming::Fps(4),
+                layout: BackLayout::Horizontal,
+            }
+        );
+        assert_eq!(
+            back_def("back_64"),
+            BackDef::Strip {
+                image: asset_path("backs/back_64.png"),
+                frames: 4,
+                timing: BackTiming::DurationsMs(vec![250, 250, 250, 49_250]),
+                layout: BackLayout::Horizontal,
+            }
+        );
+        assert_eq!(
+            back_def("back_65"),
+            BackDef::Strip {
+                image: asset_path("backs/back_65.png"),
+                frames: 4,
+                timing: BackTiming::DurationsMs(vec![250, 250, 250, 14_250]),
+                layout: BackLayout::Horizontal,
+            }
+        );
+
+        // Every strip's width is its own frame count times the real card
+        // width -- pins `frames` independently of `validate::run`'s own
+        // (looser, "some success") cross-check above.
+        for (name, frames) in [
+            ("back_56", 4),
+            ("back_63", 2),
+            ("back_64", 4),
+            ("back_65", 4),
+        ] {
+            let strip = raster::decode(
+                &std::fs::read(output.join("backs").join(format!("{name}.png"))).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(strip.width, frames * CARD_W, "{name}");
+            assert_eq!(strip.height, CARD_H, "{name}");
+        }
+
+        // Poker (back_65): cell 0 and cell 2 blit sprite 678 (200,0,0) at
+        // (32,32); cell 1 blits sprite 679 (0,200,0) at the same rect; cell
+        // 3 is clean, so that same rect there still shows the base color
+        // (40,40,40). Outside the blit rect — and inside the corner cutout,
+        // which clears the outer two rows and columns — every cell shows the
+        // base color unchanged.
+        let poker =
+            raster::decode(&std::fs::read(output.join("backs").join("back_65.png")).unwrap())
+                .unwrap();
+        assert_eq!(pixel_at(&poker, 32, 32), [200, 0, 0, 255]); // cell 0
+        assert_eq!(pixel_at(&poker, CARD_W + 32, 32), [0, 200, 0, 255]); // cell 1
+        assert_eq!(pixel_at(&poker, 2 * CARD_W + 32, 32), [200, 0, 0, 255]); // cell 2
+        assert_eq!(pixel_at(&poker, 3 * CARD_W + 32, 32), [40, 40, 40, 255]); // cell 3 (clean)
+        assert_eq!(pixel_at(&poker, 2, 2), [40, 40, 40, 255]); // outside the blit, cell 0
+    }
+
+    #[test]
+    fn animate_with_sprites_withheld_leaves_the_recipe_back_static_with_a_note() {
+        // back_65 (poker) is a recipe back, but none of its sprites are
+        // present in this fixture at all.
+        let backs = vec![animate_back_entry(65, (40, 40, 40))];
+        let image = animate_pe_image(backs, vec![]);
+        let (_dir, output, result) = run_file_animate(&image, true);
+        let summary = result.unwrap();
+        crate::validate::run(&output).unwrap();
+
+        assert!(summary.contains("back_65 not animated"), "{summary}");
+        assert!(summary.contains("no backs were animated"), "{summary}");
+        assert!(!summary.contains("Animated:"), "{summary}");
+
+        let toml = std::fs::read_to_string(output.join("theme.toml")).unwrap();
+        let manifest = Manifest::from_toml_str(&toml).unwrap();
+        let (_, def) = manifest
+            .backs
+            .iter()
+            .find(|(name, _)| name.as_str() == "back_65")
+            .unwrap();
+        assert_eq!(
+            *def,
+            BackDef::Static {
+                image: asset_path("backs/back_65.png")
+            }
+        );
+    }
+
+    /// Degradation is per back, not per run: a container that carries the
+    /// sprites three recipe backs need but not the fourth's animates the
+    /// three and leaves the fourth a static back, and the summary says both
+    /// things at once. No other fixture mixes the two outcomes, so without
+    /// this a change that made one failure abandon the whole run would pass.
+    #[test]
+    fn animate_degrades_per_back_not_per_run() {
+        let backs = vec![
+            animate_back_entry(56, (10, 10, 10)), // robot -> sprites 683, 684
+            animate_back_entry(63, (20, 20, 20)), // castle -> sprite 680
+            animate_back_entry(64, (30, 30, 30)), // palm -> sprites 681, 682
+            animate_back_entry(65, (40, 40, 40)), // poker -> sprites 678, 679
+        ];
+        // Everything except poker's two sprites.
+        let sprites = animate_sprite_entries()
+            .into_iter()
+            .filter(|sprite| !matches!(sprite, Rsrc::Id(678 | 679, _)))
+            .collect();
+
+        let image = animate_pe_image(backs, sprites);
+        let (_dir, output, result) = run_file_animate(&image, true);
+        let summary = result.unwrap();
+        crate::validate::run(&output).unwrap();
+
+        assert!(
+            summary.contains("Animated: back_56, back_63, back_64"),
+            "{summary}"
+        );
+        assert!(summary.contains("back_65 not animated"), "{summary}");
+        assert!(
+            !summary.contains("no backs were animated"),
+            "three of four did: {summary}"
+        );
+
+        let toml = std::fs::read_to_string(output.join("theme.toml")).unwrap();
+        let manifest = Manifest::from_toml_str(&toml).unwrap();
+        let back_def = |name: &str| {
+            manifest
+                .backs
+                .iter()
+                .find(|(back_name, _)| back_name.as_str() == name)
+                .map(|(_, def)| def.clone())
+                .unwrap()
+        };
+
+        for name in ["back_56", "back_63", "back_64"] {
+            let def = back_def(name);
+            assert!(matches!(def, BackDef::Strip { .. }), "{name}: {def:?}");
+        }
+        assert_eq!(
+            back_def("back_65"),
+            BackDef::Static {
+                image: asset_path("backs/back_65.png")
+            },
+            "the back whose sprites were missing stays static"
+        );
+    }
+
+    #[test]
+    fn animate_leaves_non_recipe_and_off_size_resources_classified_as_today() {
+        let backs = vec![
+            animate_back_entry(54, (50, 60, 70)), // not a recipe id -> ordinary static back
+            Rsrc::Id(90, solid_dib(9, 9, (1, 2, 3))), // off-size, non-sprite -> still skipped
+        ];
+        let image = animate_pe_image(backs, animate_sprite_entries());
+        let (_dir, output, result) = run_file_animate(&image, true);
+        let summary = result.unwrap();
+        crate::validate::run(&output).unwrap();
+
+        assert!(summary.contains("back_54"), "{summary}");
+        assert!(summary.contains("9x9 does not match"), "{summary}");
+        assert!(!summary.contains("Animated:"), "{summary}");
+        assert!(summary.contains("no backs were animated"), "{summary}");
+
+        let toml = std::fs::read_to_string(output.join("theme.toml")).unwrap();
+        let manifest = Manifest::from_toml_str(&toml).unwrap();
+        let (_, def) = manifest
+            .backs
+            .iter()
+            .find(|(name, _)| name.as_str() == "back_54")
+            .unwrap();
+        assert_eq!(
+            *def,
+            BackDef::Static {
+                image: asset_path("backs/back_54.png")
+            }
+        );
+    }
+
+    #[test]
+    fn without_animate_recipe_and_sprite_resource_ids_are_classified_exactly_as_before() {
+        let backs = vec![
+            animate_back_entry(56, (10, 10, 10)),
+            animate_back_entry(63, (20, 20, 20)),
+            animate_back_entry(64, (30, 30, 30)),
+            animate_back_entry(65, (40, 40, 40)),
+        ];
+        let image = animate_pe_image(backs, animate_sprite_entries());
+        // No `--animate`: recipe-id backs and overlay-sprite resources get
+        // exactly today's treatment -- static backs and off-size skips.
+        let (_dir, output, result) = run_file(&image);
+        let summary = result.unwrap();
+        crate::validate::run(&output).unwrap();
+
+        for name in ["back_56", "back_63", "back_64", "back_65"] {
+            assert!(summary.contains(name), "{summary}");
+        }
+        assert!(!summary.contains("Animated:"), "{summary}");
+        assert!(!summary.contains("not animated"), "{summary}");
+        assert!(!summary.contains("no backs were animated"), "{summary}");
+        // All seven overlay sprites are far smaller than the 71x96 card
+        // size, so -- with no diversion happening -- every one of them is
+        // skip-noted exactly like any other off-size resource id.
+        for id in [678, 679, 680, 681, 682, 683, 684] {
+            assert!(
+                summary.contains(&format!("resource id {id}: ")),
+                "{summary}"
+            );
+        }
+
+        let toml = std::fs::read_to_string(output.join("theme.toml")).unwrap();
+        let manifest = Manifest::from_toml_str(&toml).unwrap();
+        for name in ["back_56", "back_63", "back_64", "back_65"] {
+            let (_, def) = manifest
+                .backs
+                .iter()
+                .find(|(back_name, _)| back_name.as_str() == name)
+                .unwrap();
+            assert_eq!(
+                *def,
+                BackDef::Static {
+                    image: asset_path(&format!("backs/{name}.png"))
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn animate_on_a_loose_directory_input_is_a_typed_usage_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("loose");
+        std::fs::create_dir(&input).unwrap();
+        let output = dir.path().join("out");
+
+        let error = run(&input, &output, true).unwrap_err();
+
+        assert!(matches!(error, ExtractError::AnimateRequiresResourceInput));
+        assert!(error.to_string().contains("--animate"), "{error}");
     }
 
     // -- PE end to end --
@@ -1497,7 +1952,7 @@ mod tests {
     #[test]
     fn a_nonexistent_input_file_is_input_unreadable() {
         let dir = tempfile::tempdir().unwrap();
-        let result = run(&dir.path().join("nope.dll"), &dir.path().join("out"));
+        let result = run(&dir.path().join("nope.dll"), &dir.path().join("out"), false);
         assert!(matches!(
             result.unwrap_err(),
             ExtractError::InputUnreadable { .. }
@@ -1515,7 +1970,7 @@ mod tests {
         let input = dir.path().join("in.bin");
         std::fs::write(&input, ne_image(vec![])).unwrap();
         assert!(matches!(
-            run(&input, &output).unwrap_err(),
+            run(&input, &output, false).unwrap_err(),
             ExtractError::OutputNotEmpty { .. }
         ));
     }
@@ -1527,7 +1982,7 @@ mod tests {
         std::fs::create_dir(&output).unwrap();
         let input = dir.path().join("in.bin");
         std::fs::write(&input, ne_image(vec![])).unwrap();
-        run(&input, &output).unwrap();
+        run(&input, &output, false).unwrap();
         crate::validate::run(&output).unwrap();
     }
 
@@ -1542,7 +1997,7 @@ mod tests {
         let input = dir.path().join("in.bin");
         std::fs::write(&input, ne_image(vec![])).unwrap();
         assert!(matches!(
-            run(&input, &output).unwrap_err(),
+            run(&input, &output, false).unwrap_err(),
             ExtractError::OutputUnwritable { .. }
         ));
     }
@@ -1555,7 +2010,7 @@ mod tests {
         let input = dir.path().join("in.bin");
         std::fs::write(&input, ne_image(vec![])).unwrap();
         assert!(matches!(
-            run(&input, &output).unwrap_err(),
+            run(&input, &output, false).unwrap_err(),
             ExtractError::OutputNotEmpty { .. }
         ));
     }
@@ -1575,7 +2030,7 @@ mod tests {
         std::fs::create_dir(input.join("subdir")).unwrap();
 
         let output = dir.path().join("out");
-        let summary = run(&input, &output).unwrap();
+        let summary = run(&input, &output, false).unwrap();
         crate::validate::run(&output).unwrap();
         assert!(summary.contains("castle"), "{summary}");
         assert!(summary.contains("Skipped: nothing"), "{summary}");
@@ -1592,7 +2047,7 @@ mod tests {
             std::fs::write(input.join(format!("{id}.png")), png_bytes(W, H, [1, 2, 3])).unwrap();
         }
         let output = dir.path().join("out");
-        run(&input, &output).unwrap();
+        run(&input, &output, false).unwrap();
         crate::validate::run(&output).unwrap();
     }
 
@@ -1605,7 +2060,7 @@ mod tests {
         std::fs::write(input.join("1.png"), png_bytes(W, H, [0, 0, 0])).unwrap();
         let output = dir.path().join("out");
         assert!(matches!(
-            run(&input, &output).unwrap_err(),
+            run(&input, &output, false).unwrap_err(),
             ExtractError::LooseMixedConventions
         ));
     }
@@ -1617,7 +2072,7 @@ mod tests {
         std::fs::create_dir(&input).unwrap();
         std::fs::write(input.join("spades_01.png"), png_bytes(W, H, [0, 0, 0])).unwrap();
         let output = dir.path().join("out");
-        let error = run(&input, &output).unwrap_err();
+        let error = run(&input, &output, false).unwrap_err();
         assert!(matches!(
             error,
             ExtractError::LooseFacesIncomplete { found: 1 }
@@ -1635,7 +2090,7 @@ mod tests {
         std::fs::write(input.join("spades_01.png"), png_bytes(W + 2, H, [0, 0, 0])).unwrap();
         let output = dir.path().join("out");
         assert!(matches!(
-            run(&input, &output).unwrap_err(),
+            run(&input, &output, false).unwrap_err(),
             ExtractError::FaceSizeMismatch(_)
         ));
     }
@@ -1651,7 +2106,7 @@ mod tests {
         std::fs::write(input.join("robot_0.png"), png_bytes(W, H, [1, 0, 0])).unwrap();
         std::fs::write(input.join("robot_1.png"), png_bytes(W, H, [0, 1, 0])).unwrap();
         let output = dir.path().join("out");
-        run(&input, &output).unwrap();
+        run(&input, &output, false).unwrap();
         crate::validate::run(&output).unwrap();
 
         let toml = std::fs::read_to_string(output.join("theme.toml")).unwrap();
@@ -1677,7 +2132,7 @@ mod tests {
         // A single-frame group (lone_0) also stays a static back.
         std::fs::write(input.join("lone_0.png"), png_bytes(W, H, [0, 0, 1])).unwrap();
         let output = dir.path().join("out");
-        run(&input, &output).unwrap();
+        run(&input, &output, false).unwrap();
         crate::validate::run(&output).unwrap();
 
         let toml = std::fs::read_to_string(output.join("theme.toml")).unwrap();
@@ -1696,7 +2151,7 @@ mod tests {
         write_canonical_faces(&input);
         std::fs::write(input.join("banner.png"), png_bytes(W * 3, H, [0, 0, 0])).unwrap();
         let output = dir.path().join("out");
-        let summary = run(&input, &output).unwrap();
+        let summary = run(&input, &output, false).unwrap();
         // Only the fallback back remains; the banner is skipped.
         assert!(summary.contains("does not match"), "{summary}");
         assert!(summary.contains("back_solid"), "{summary}");
@@ -1710,7 +2165,7 @@ mod tests {
         std::fs::write(input.join("broken.bmp"), b"BM not really a bitmap at all").unwrap();
         let output = dir.path().join("out");
         assert!(matches!(
-            run(&input, &output).unwrap_err(),
+            run(&input, &output, false).unwrap_err(),
             ExtractError::LooseFileUndecodable { .. }
         ));
     }
@@ -1723,7 +2178,7 @@ mod tests {
         std::fs::write(input.join("broken.png"), b"not a png at all").unwrap();
         let output = dir.path().join("out");
         assert!(matches!(
-            run(&input, &output).unwrap_err(),
+            run(&input, &output, false).unwrap_err(),
             ExtractError::LooseFileUndecodable { .. }
         ));
     }
@@ -1739,7 +2194,7 @@ mod tests {
         std::fs::set_permissions(&input, std::fs::Permissions::from_mode(0o000)).unwrap();
         let output = dir.path().join("out");
 
-        let result = run(&input, &output);
+        let result = run(&input, &output, false);
         // Restore before any assertion can panic, so the tempdir can clean itself up.
         std::fs::set_permissions(&input, std::fs::Permissions::from_mode(0o755)).unwrap();
 
@@ -1762,7 +2217,7 @@ mod tests {
         std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000)).unwrap();
         let output = dir.path().join("out");
 
-        let result = run(&input, &output);
+        let result = run(&input, &output, false);
         // Restore before any assertion can panic, so the tempdir can clean itself up.
         std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o644)).unwrap();
 
@@ -1818,16 +2273,19 @@ mod tests {
                 name: "castle".to_owned(),
                 image: solid_image((W, H), [0, 0, 0]),
                 frames: None,
+                timing: None,
             },
             ClassifiedBack {
                 name: "castle".to_owned(),
                 image: solid_image((W, H), [0, 0, 0]),
                 frames: None,
+                timing: None,
             },
             ClassifiedBack {
                 name: "castle".to_owned(),
                 image: solid_image((W, H), [0, 0, 0]),
                 frames: None,
+                timing: None,
             },
         ];
         uniquify_back_names(&mut backs);
@@ -1845,7 +2303,7 @@ mod tests {
         std::fs::write(input.join("castle.png"), png_bytes(W, H, [1, 0, 0])).unwrap();
         std::fs::write(input.join("Castle.png"), png_bytes(W, H, [0, 1, 0])).unwrap();
         let output = dir.path().join("out");
-        run(&input, &output).unwrap();
+        run(&input, &output, false).unwrap();
         crate::validate::run(&output).unwrap();
         let toml = std::fs::read_to_string(output.join("theme.toml")).unwrap();
         assert!(toml.contains("castle = { image"), "{toml}");
@@ -1922,6 +2380,7 @@ mod tests {
             found_height: 7,
         };
         for error in [
+            ExtractError::AnimateRequiresResourceInput,
             ExtractError::InputUnreadable {
                 path: "p".to_owned(),
                 message: "m".to_owned(),
