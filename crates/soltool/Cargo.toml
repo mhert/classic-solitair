@@ -5,7 +5,20 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 authors.workspace = true
-description = "Asset extraction and theme conversion CLI."
+description = "Asset extraction and theme authoring CLI."
+
+[dependencies]
+clap.workspace = true
+image.workspace = true
+pelite.workspace = true
+png.workspace = true
+sol-theme = { path = "../sol-theme" }
+thiserror.workspace = true
+toml_edit.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+zip.workspace = true
 
 [lints]
 workspace = true

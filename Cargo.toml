@@ -47,11 +47,28 @@ roxmltree = "0.21"
 # while the 8-bit one reproduces its distance table exactly at the usual
 # 64 MiB / one-time-build cost.
 xbrz-rs = { version = "0.1", features = ["large_lut"] }
+# derive: `#[derive(Parser/Subcommand/Args)]` — soltool's CLI definitions.
+clap = { version = "4", features = ["derive"] }
+# Reads PE (Win32/PE32+) resource directories for `soltool extract`. Memory-safe,
+# zero-allocation, no_std-capable — parses the header-less DIBs the same decoder
+# handles for NE. NE (Win16) is hand-rolled (pelite cannot parse NE).
+pelite = "0.10"
 # Decodes/encodes soltool's shared PNG raster utility (soltool's one place
 # that touches PNG pixels) and backs sol-theme's PNG dimension probe
 # (crates/sol-theme/src/png.rs). sol-theme only reads header/IHDR info via
 # `read_info` there — it never decodes pixel data.
 png = "0.18"
+# Decodes soltool's header-less DIB/BMP resource bitmaps
+# (crates/soltool/src/dib.rs) via its BMP codec, replacing a hand-rolled
+# BITMAPCOREHEADER/BITMAPINFOHEADER parser. default-features = false + bmp:
+# only that one codec, not the PNG/JPEG/etc. others `image` bundles (this
+# workspace has its own `png` crate above for PNG).
+image = { version = "0.25", default-features = false, features = ["bmp"] }
+# DocumentMut/InlineTable-based theme.toml renderer for soltool's
+# manifest_writer — IndexMap-backed so declaration order is preserved, and
+# escaping (including U+007F) is the crate's job instead of a hand-rolled
+# string escaper.
+toml_edit = "0.25"
 # Renderer-grade SVG parser backing sol-theme's SVG dimension probe
 # (crates/sol-theme/src/svg.rs) — the same parser the renderer will use, so
 # "sol-theme accepts this SVG" and "the renderer can draw this SVG" become the

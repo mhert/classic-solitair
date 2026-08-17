@@ -1,6 +1,24 @@
-//! `soltool` — asset extraction and theme conversion CLI.
+//! `soltool` — asset extraction and theme authoring CLI.
 //!
-//! Extracts and converts a user's own local Windows theme assets into
-//! classic-solitair theme packages. Never downloads or bundles them.
+//! Thin binary: parse the CLI, call the library, map the outcome to an
+//! exit code, print errors to stderr. See `soltool::run`'s doc for the
+//! exit-code contract. All actual logic lives in the library (`src/lib.rs`
+//! and its modules), which is what the integration tests under `tests/`
+//! exercise by spawning this binary.
 
-fn main() {}
+use clap::Parser as _;
+use soltool::Cli;
+
+fn main() -> std::process::ExitCode {
+    let cli = Cli::parse();
+    match soltool::run(cli.command) {
+        Ok(message) => {
+            println!("{message}");
+            std::process::ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::ExitCode::from(1)
+        }
+    }
+}
