@@ -4,6 +4,7 @@ members = [
     "crates/sol-engine",
     "crates/sol-session",
     "crates/sol-theme",
+    "crates/sol-xbrz",
     "crates/sol-presenter",
     "crates/sol-render-wgpu",
     "crates/soltool",
@@ -40,6 +41,12 @@ zip = { version = "8", default-features = false, features = ["deflate"] }
 # could otherwise pass as a valid card size. Also arrives transitively via
 # `usvg`, so keeping it a direct dependency adds zero tree weight.
 roxmltree = "0.21"
+# The xBRZ pixel-art upscaler behind `sol-xbrz`, a pure-Rust port of upstream
+# xBRZ 1.8. `large_lut` is required for output fidelity, not performance: the
+# default 5-bit colour lookup table diverges from upstream on every pixel,
+# while the 8-bit one reproduces its distance table exactly at the usual
+# 64 MiB / one-time-build cost.
+xbrz-rs = { version = "0.1", features = ["large_lut"] }
 # Decodes/encodes soltool's shared PNG raster utility (soltool's one place
 # that touches PNG pixels) and backs sol-theme's PNG dimension probe
 # (crates/sol-theme/src/png.rs). sol-theme only reads header/IHDR info via

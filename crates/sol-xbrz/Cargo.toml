@@ -1,0 +1,18 @@
+[package]
+name = "sol-xbrz"
+version.workspace = true
+edition.workspace = true
+# NOT the workspace license: this crate's dependency `xbrz-rs` is GPL-3.0-only
+# with no "or-later" grant, so we claim the conservative identifier rather than
+# the workspace's "GPL-3.0-or-later".
+license = "GPL-3.0-only"
+rust-version.workspace = true
+authors.workspace = true
+description = "Safe wrapper over the pure-Rust xBRZ 1.8 image scaler."
+
+[dependencies]
+thiserror.workspace = true
+xbrz-rs.workspace = true
+
+[lints]
+workspace = true
