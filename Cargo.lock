@@ -867,6 +867,13 @@ dependencies = [
 [[package]]
 name = "sol-presenter"
 version = "0.1.0"
+dependencies = [
+ "proptest",
+ "sol-engine",
+ "sol-session",
+ "sol-theme",
+ "thiserror",
+]
 
 [[package]]
 name = "sol-qt"

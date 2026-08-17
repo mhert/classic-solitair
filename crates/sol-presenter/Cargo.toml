@@ -7,5 +7,14 @@ rust-version.workspace = true
 authors.workspace = true
 description = "Layout, hit-testing, drag logic, and animation timing → sprite display lists."
 
+[dependencies]
+sol-engine = { path = "../sol-engine" }
+sol-session = { path = "../sol-session" }
+sol-theme = { path = "../sol-theme" }
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
 [lints]
 workspace = true
