@@ -10,6 +10,12 @@ use std::path::{Path, PathBuf};
 
 use sol_theme::{Theme, ThemeError};
 
+/// The default theme, embedded as a zip at build time (see `build.rs`), so a
+/// shipped binary resolves `"default"` with nothing on disk. On-disk copies
+/// (dev tree, or a user-installed `<data>/themes/default`) take precedence;
+/// see [`discover_among`].
+pub const DEFAULT_THEME_ZIP: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/default-theme.zip"));
+
 /// One selectable theme: its session id and its package location.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThemeEntry {
@@ -165,7 +171,7 @@ pub fn load(entries: &[ThemeEntry], id: &str) -> Result<Theme, ThemeLookupError>
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
 
@@ -301,5 +307,16 @@ mod tests {
     fn the_user_theme_dir_sits_under_the_data_dir() {
         let dir = user_theme_dir().unwrap();
         assert!(dir.ends_with("themes"), "{}", dir.display());
+    }
+
+    #[test]
+    fn the_embedded_default_loads_and_matches_the_in_tree_theme() {
+        let embedded = Theme::load_zip_bytes(DEFAULT_THEME_ZIP).unwrap();
+        // In any source checkout the in-tree theme exists; the embedded copy is
+        // built from it, so the two loaded themes must be identical. Guards the
+        // zip/dir source paths against drift.
+        let dev = dev_default_dir().expect("in-tree default present in a source checkout");
+        let on_disk = Theme::load_dir(dev).unwrap();
+        assert_eq!(embedded, on_disk);
     }
 }

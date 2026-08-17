@@ -25,5 +25,10 @@ thiserror.workspace = true
 # exercised without touching the developer's own data directory.
 tempfile.workspace = true
 
+[build-dependencies]
+# Zips themes/default at build time into OUT_DIR for include_bytes!; deflate
+# is the only method needed (matches the workspace zip feature set).
+zip.workspace = true
+
 [lints]
 workspace = true
