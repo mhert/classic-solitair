@@ -1,0 +1,241 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege: every job only reads the repository.
+permissions:
+  contents: read
+
+# A new push to the same ref supersedes any run already in flight for it,
+# so the stale run is cancelled instead of racing the new one to completion.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup show
+      - run: cargo fmt --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      # sol-qt (cxx-qt) needs Qt to compile: `--all-targets --all-features`
+      # below builds it, including its offscreen --smoke test, which needs
+      # both the dev headers and the runtime QML modules its chrome
+      # imports.
+      - name: Install Qt6
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qt6-base-dev qt6-declarative-dev \
+            qml6-module-qtqml qml6-module-qtquick \
+            qml6-module-qtquick-controls qml6-module-qtquick-layouts \
+            qml6-module-qtquick-templates qml6-module-qtquick-window
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The pinned version is what stops a compromised release of the
+      # tool itself landing here — cargo-deny is the gate that would catch
+      # a poisoned dependency tree, so its own provenance matters most of
+      # all. Installed as a prebuilt binary (taiki-e/install-action) rather
+      # than compiled from source: `cargo install --locked` was overrunning
+      # this job's timeout.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.20.2
+      - run: cargo deny check
+
+  # One job per (os, crate) so a slow or flaky crate can never block, or
+  # get blocked by, any other crate's result. Linux carries every crate;
+  # Windows carries only the portable pure-Rust crates plus sol-win32.
+  # sol-qt is Linux-only because Qt isn't installed on the Windows
+  # runner, and sol-render-wgpu's golden-image tests are Linux-only
+  # because their goldens are blessed byte-exact against Mesa's software
+  # rasterizers — WARP (Windows' software D3D12 adapter) rounds
+  # differently and would never match them.
+  test:
+    name: test / ${{ matrix.os }} / ${{ matrix.crate }}
+    runs-on: ${{ matrix.os }}
+    # The GPU crates carry their own higher ceiling: a cold cxx-qt (C++/moc)
+    # plus wgpu build overruns 30 min on the first, uncached run, after which
+    # the build caches and the job returns in a couple of minutes.
+    timeout-minutes: ${{ matrix.timeout || 30 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, crate: sol-engine }
+          - { os: ubuntu-latest, crate: sol-session }
+          - { os: ubuntu-latest, crate: sol-theme }
+          - { os: ubuntu-latest, crate: sol-xbrz }
+          - { os: ubuntu-latest, crate: sol-presenter }
+          - { os: ubuntu-latest, crate: sol-frontend }
+          - { os: ubuntu-latest, crate: soltool }
+          - { os: ubuntu-latest, crate: sol-win32 }
+          - { os: ubuntu-latest, crate: sol-shell }
+          - { os: ubuntu-latest, crate: sol-render-wgpu, mesa: true, timeout: 45 }
+          - { os: ubuntu-latest, crate: sol-qt, qt: true, mesa: true, timeout: 45 }
+          - { os: windows-latest, crate: sol-engine }
+          - { os: windows-latest, crate: sol-session }
+          - { os: windows-latest, crate: sol-theme }
+          - { os: windows-latest, crate: sol-xbrz }
+          - { os: windows-latest, crate: sol-presenter }
+          - { os: windows-latest, crate: sol-frontend }
+          - { os: windows-latest, crate: soltool }
+          - { os: windows-latest, crate: sol-win32 }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Qt 6.7.2 via aqt
+        if: matrix.qt
+        # Ubuntu's Qt 6.4.2 hangs the offscreen QtQuick chrome smoke on the
+        # headless runner; 6.7.2 (the version developed against) does not. Pull
+        # it with aqtinstall and point the build and runtime at it. aqt ships
+        # only Qt's own binaries, so install the system libraries QtGui/QtQuick
+        # load at runtime.
+        run: |
+          sudo apt-get update
+          # Dev GL/EGL, not just runtime: aqt's Qt links with -lGL, and the
+          # libGL.so linker symlink only ships in the -dev packages (the apt
+          # qt6-base-dev route used to pull them in transitively).
+          sudo apt-get install -y --no-install-recommends \
+            libgl-dev libegl-dev libxkbcommon0 libfontconfig1 libdbus-1-3 libglib2.0-0
+          pipx install aqtinstall
+          # The linux desktop arch is named linux_gcc_64 for Qt >= 6.7 (plain
+          # gcc_64 matches nothing); glob the created directory rather than
+          # assuming what it is named on disk.
+          aqt install-qt linux desktop 6.7.2 linux_gcc_64 -O "$HOME/Qt"
+          qt=$(ls -d "$HOME"/Qt/6.7.2/*/); qt="${qt%/}"
+          echo "$qt/bin" >> "$GITHUB_PATH"
+          echo "QMAKE=$qt/bin/qmake6" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$qt/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+      - name: Install Mesa software rasterizers
+        if: matrix.mesa
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libegl1 libgl1-mesa-dri
+      - name: cargo test -p ${{ matrix.crate }}
+        env:
+          SOL_RENDER_REQUIRE_SOFTWARE: ${{ matrix.mesa && '1' || '' }}
+          LIBGL_ALWAYS_SOFTWARE: ${{ matrix.mesa && '1' || '' }}
+          # QtQuick under the offscreen platform still brings up its OpenGL/RHI
+          # scene graph, which never initializes on the headless runner and
+          # hangs the chrome smoke test. Force the software scene-graph backend
+          # so the smoke (which inherits this env) boots without a GPU.
+          QT_QUICK_BACKEND: ${{ matrix.qt && 'software' || '' }}
+        run: cargo test -p ${{ matrix.crate }} --all-features
+
+  assets:
+    name: assets (soltool validate + theme reproducibility)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - name: soltool validate (in-tree default theme)
+        run: cargo run -p soltool -- validate themes/default
+      # The default theme's 57 SVGs are generated, and the generator writes
+      # them in place (it resolves its own directory), so re-running it and
+      # diffing is the whole check: a committed asset that its generator no
+      # longer reproduces is a fork nobody declared.
+      - name: themes/default is reproducible from its generator
+        run: |
+          python3 themes/default/generate.py
+          git diff --exit-code themes/default
+
+  wasm:
+    name: wasm-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - run: rustup target add wasm32-unknown-unknown
+      - run: cargo check --target wasm32-unknown-unknown -p sol-engine -p sol-presenter
+
+  versioning:
+    name: versioning (bump script + drift guard)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      # The version must be identical in the manifest and the one packaging file that
+      # carries it committed (Windows/deb take theirs from the build command). This
+      # catches a hand-edit that bumps one but forgets the other.
+      - name: packaging and manifest versions agree
+        run: |
+          manifest="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+          pkgbuild="$(sed -n 's/^pkgver=//p' packaging/arch/PKGBUILD)"
+          if [ "$manifest" != "$pkgbuild" ]; then
+            echo "::error::PKGBUILD pkgver ($pkgbuild) != Cargo.toml version ($manifest)"
+            exit 1
+          fi
+          echo "version consistent: $manifest"
+      - name: bump-version.sh tests
+        run: sh scripts/bump-version.test.sh
+
+  changed-code-gates:
+    name: llvm-cov + mutants (changed code)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # cargo-mutants --in-diff needs the base commit to diff against.
+          fetch-depth: 0
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      # cargo-mutants' baseline build compiles the whole workspace tree,
+      # which includes sol-qt's Qt link, even though the coverage and
+      # mutation steps below are both scoped away from it.
+      - name: Install Qt6
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qt6-base-dev qt6-declarative-dev
+      # Version-pinned for the same reason as cargo-deny above: the
+      # pinned versions guard against a compromised tool release, and
+      # installing prebuilt binaries (rather than compiling from source)
+      # is what keeps this job inside its timeout.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov@0.8.7,cargo-mutants@27.1.0
+      # Line coverage only: --branch needs the nightly-only
+      # -Z coverage-options, and the toolchain is pinned stable. Scoped to
+      # the crates whose behaviour is decidable without a GPU, a window or
+      # a platform toolkit — which includes sol-frontend, the frontends'
+      # shared application core. What stays out is listed with its real
+      # substitute in .cargo/mutants.toml.
+      - name: cargo llvm-cov (core crates)
+        run: cargo llvm-cov --fail-uncovered-lines 0 -p sol-engine -p sol-session -p sol-theme -p sol-xbrz -p sol-presenter -p sol-frontend -p soltool
+      # .cargo/mutants.toml scopes this, and states what each excluded
+      # crate is gated by instead.
+      # BASE_REF through the environment rather than spliced into the
+      # shell: a ref name is repository-controlled text, and `run:`
+      # interpolation would make it executable.
+      - name: cargo mutants --in-diff
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: cargo mutants --in-diff <(git diff --src-prefix=a/ --dst-prefix=b/ "origin/$BASE_REF"...HEAD) --timeout-multiplier 2

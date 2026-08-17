@@ -18,7 +18,13 @@ makedepends=('rust' 'cargo')
 # "undefined symbol: rust$cxxqtlib1$cxxbridge1$...$q*" errors. Keeping LTO off
 # leaves the shims as ordinary objects that link cleanly. Rust-level codegen
 # is unaffected (the release profile does not enable Cargo LTO).
-options=(!lto)
+#
+# !debug also overrides a makepkg default. With `debug` on, makepkg builds with
+# -C debuginfo=2 and (together with `strip`) splits the debug symbols into a
+# separate classic-solitair-debug package. That companion is for maintainers,
+# not end users of a release, so we don't produce it — the main package is
+# still stripped.
+options=(!lto !debug)
 
 source=("$pkgname-$pkgver.tar.gz::https://github.com/mhert/classic-solitair/archive/refs/tags/v$pkgver.tar.gz")
 sha256sums=('SKIP')

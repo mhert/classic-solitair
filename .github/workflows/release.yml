@@ -1,0 +1,404 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Which part of the version to bump (Semantic Versioning)"
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      dry_run:
+        description: "Preview the bump and build artifacts without committing, tagging, or releasing (uncheck for a real release)"
+        type: boolean
+        default: true
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      is_release: ${{ steps.v.outputs.is_release }}
+      ref: ${{ steps.v.outputs.ref }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup show
+      - id: v
+        name: Resolve version and mode
+        env:
+          EVENT: ${{ github.event_name }}
+          DRY: ${{ github.event.inputs.dry_run }}
+          BUMP: ${{ github.event.inputs.bump }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "$EVENT" = "push" ]; then
+            version="${REF_NAME#v}"; is_release=true; ref=""
+          else
+            # Dispatch: bump the selected component from the newest published
+            # version, not this checkout's committed version. The floor is the
+            # highest vX.Y.Z tag on origin; bumping from it keeps releases moving
+            # forward even if the committed version has drifted behind the last
+            # release (e.g. after a history rewrite). With no tags the floor is
+            # empty and bump-version.sh falls back to the committed version. This
+            # edits the working tree (Cargo.toml, Cargo.lock, packaging/arch/PKGBUILD);
+            # the commit step below persists it on a real release, and a dry run
+            # discards it with the job.
+            floor="$(git ls-remote --tags origin 'v*' 2>/dev/null \
+              | sed -E 's#.*refs/tags/v##; s#\^\{\}$##' \
+              | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
+              | sort -V | tail -n1 || true)"
+            version="$(BUMP_FLOOR="$floor" sh scripts/bump-version.sh "$BUMP")"
+            if [ "$DRY" = "false" ]; then is_release=true; ref="v$version"; else is_release=false; ref=""; fi
+          fi
+          {
+            echo "version=$version"
+            echo "is_release=$is_release"
+            echo "ref=$ref"
+          } >> "$GITHUB_OUTPUT"
+      - name: Commit bump, tag, and draft release
+        if: steps.v.outputs.is_release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          VERSION: ${{ steps.v.outputs.version }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          # On a manual real release, persist the bump and create the tag in THIS run.
+          # Pushes made with GITHUB_TOKEN (both the branch push and the tag push) do not
+          # trigger any workflow, so this re-runs neither CI nor Release -- nothing here
+          # depends on that: every build job runs in this same run and builds the tagged
+          # commit.
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null 2>&1; then
+              echo "::error::tag v$VERSION already exists"; exit 1
+            fi
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            # The bump was applied to the working tree in the previous step.
+            git add Cargo.toml Cargo.lock packaging/arch/PKGBUILD
+            git commit -m "chore(release): v$VERSION"
+            git push origin "HEAD:$BRANCH"
+            git tag "v$VERSION"
+            git push origin "v$VERSION"
+          fi
+          gh release create "v$VERSION" --draft --title "v$VERSION" --generate-notes --repo "$GITHUB_REPOSITORY"
+
+  # Windows: one build feeds both the portable zip and the NSIS installer.
+  windows:
+    needs: prepare
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.ref || github.sha }}
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p sol-win32 -p soltool
+      - name: Stage
+        shell: bash
+        run: |
+          mkdir -p stage
+          cp target/release/sol-win32.exe stage/classic-solitair.exe
+          cp target/release/soltool.exe stage/soltool.exe
+          cp LICENSE README.md stage/
+      - name: Verify the Windows binaries are self-contained
+        shell: bash
+        # crt-static (.cargo/config.toml) folds the MSVC runtime into each .exe.
+        # Prove it held: a dynamically-linked binary names VCRUNTIME140.dll in
+        # its PE import table (plain ASCII in the file) — the exact DLL a clean
+        # Windows install lacks and that broke the first release. This runner has
+        # the VC++ redistributable installed, so launching the binary here would
+        # succeed even after a regression; scanning the imports is what catches it.
+        run: |
+          fail=0
+          for exe in stage/classic-solitair.exe stage/soltool.exe; do
+            if grep -aiq 'VCRUNTIME140' "$exe"; then
+              echo "::error::$exe still dynamically links the MSVC runtime (VCRUNTIME140.dll)"
+              fail=1
+            else
+              echo "$exe: self-contained (no VCRUNTIME140 import)"
+            fi
+          done
+          exit $fail
+      - name: Zip
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: cd stage && 7z a "../classic-solitair-$VERSION-x86_64-windows.zip" .
+      - name: Build installer
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          choco install nsis -y
+          # -NOCD: makensis otherwise cd's to the script's directory, so the
+          # relative File "stage\..." paths would resolve under packaging/windows.
+          "/c/Program Files (x86)/NSIS/makensis.exe" -NOCD -DVERSION="$VERSION" packaging/windows/installer.nsi
+      - name: Upload
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          if [ "${{ needs.prepare.outputs.is_release }}" != "true" ]; then exit 0; fi
+          gh release upload "v$VERSION" \
+            "classic-solitair-$VERSION-x86_64-windows.zip" \
+            "classic-solitair-$VERSION-x86_64-setup.exe" --repo "${GITHUB_REPOSITORY}" --clobber
+      - if: needs.prepare.outputs.is_release != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with: { name: windows, path: "classic-solitair-*-x86_64-*" }
+
+  # Linux: a single build feeds the AppImage, and a source tarball rides along
+  # beside it. Built on 22.04 with Qt 6.7.2 from aqt (bundled), so the AppImage
+  # runs on any recent glibc without the runner's system Qt. The distro-native
+  # .deb and Arch packages are built separately below, in their own distro
+  # environments — that is what lets them link the distro's own Qt, so they
+  # cannot share this build.
+  linux:
+    needs: prepare
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.ref || github.sha }}
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Qt via aqt
+        run: |
+          sudo apt-get update
+          # Dev GL/EGL, not just runtime: aqt's Qt links with -lGL, and the
+          # libGL.so linker symlink only ships in the -dev packages.
+          sudo apt-get install -y --no-install-recommends \
+            libgl-dev libegl-dev libxkbcommon0 libxkbcommon-x11-0 libfontconfig1 libdbus-1-3 libglib2.0-0 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
+            libxcb-render-util0 libxcb-shape0 libxcb-xkb1 libxcb-util1 \
+            mesa-vulkan-drivers libgl1-mesa-dri
+          pipx install aqtinstall
+          # The linux desktop arch is named linux_gcc_64 for Qt >= 6.7 (plain
+          # gcc_64 matches nothing); glob the created directory rather than
+          # assuming what it is named on disk.
+          aqt install-qt linux desktop 6.7.2 linux_gcc_64 -O "$PWD/Qt"
+          qt=$(ls -d "$PWD"/Qt/6.7.2/*/); qt="${qt%/}"
+          echo "$qt/bin" >> "$GITHUB_PATH"
+          echo "QMAKE=$qt/bin/qmake6" >> "$GITHUB_ENV"
+          # linuxdeploy resolves the binary's Qt dependencies through the loader
+          # path, so the aqt Qt libraries must be discoverable there.
+          echo "LD_LIBRARY_PATH=$qt/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+      - name: Build (once)
+        run: cargo build --release -p sol-qt -p soltool
+      - name: Assemble AppDir
+        run: |
+          mkdir -p AppDir/usr/bin AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/scalable/apps
+          cp target/release/sol-qt AppDir/usr/bin/classic-solitair
+          cp target/release/soltool AppDir/usr/bin/soltool
+          cp packaging/linux/classic-solitair.desktop AppDir/usr/share/applications/
+          cp packaging/linux/classic-solitair.svg AppDir/usr/share/icons/hicolor/scalable/apps/
+      - name: linuxdeploy + Qt plugin (bundles Qt into the AppDir)
+        env:
+          QML_SOURCES_PATHS: crates/sol-qt/qml
+          # Bundle the offscreen platform plugin as well; linuxdeploy-plugin-qt
+          # ships only xcb by default, so the offscreen smoke (and any headless
+          # use) would otherwise find no usable platform plugin.
+          EXTRA_PLATFORM_PLUGINS: libqoffscreen.so
+          OUTPUT: Classic_Solitair-${{ needs.prepare.outputs.version }}-x86_64.AppImage
+        run: |
+          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+          chmod +x linuxdeploy*.AppImage
+          ./linuxdeploy-x86_64.AppImage --appdir AppDir --plugin qt --output appimage \
+            --desktop-file AppDir/usr/share/applications/classic-solitair.desktop \
+            --icon-file AppDir/usr/share/icons/hicolor/scalable/apps/classic-solitair.svg
+      - name: Smoke-test the AppImage (offscreen, software rendering)
+        # Same software-render environment the sol-qt CI smoke runs under: no GPU
+        # on the runner, so wgpu needs the Mesa software adapter and QtQuick the
+        # software scene graph.
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+          QT_QPA_PLATFORM: offscreen
+          QT_QUICK_BACKEND: software
+          SOL_RENDER_REQUIRE_SOFTWARE: "1"
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          # Clear the aqt build library path so the AppImage runs against only
+          # its own bundled Qt, proving it is self-contained.
+          LD_LIBRARY_PATH: ""
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          "./Classic_Solitair-$VERSION-x86_64.AppImage" --smoke --seed 1
+      - name: Source tarball
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          git archive --format=tar.gz --prefix="classic-solitair-$VERSION/" \
+            -o "classic-solitair-$VERSION.tar.gz" HEAD
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          if [ "${{ needs.prepare.outputs.is_release }}" != "true" ]; then exit 0; fi
+          gh release upload "v$VERSION" \
+            "Classic_Solitair-$VERSION-x86_64.AppImage" \
+            "classic-solitair-$VERSION.tar.gz" --repo "${GITHUB_REPOSITORY}" --clobber
+      - if: needs.prepare.outputs.is_release != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux
+          path: |
+            Classic_Solitair-*-x86_64.AppImage
+            classic-solitair-*.tar.gz
+
+  # Distro-native Debian/Ubuntu packages: each builds in its own distro
+  # container so the binary links that distro's Qt6 and the Depends resolve
+  # (the package names differ between them via Debian's t64 transition).
+  deb:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { image: "ubuntu:24.04", tag: ubuntu24.04 }
+          - { image: "debian:13", tag: debian13 }
+    container: ${{ matrix.image }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.ref || github.sha }}
+      - name: Build deps
+        run: |
+          apt-get update
+          # ca-certificates: the container has none, so the rustup installer's
+          # HTTPS download fails with a curl (77) certificate error otherwise.
+          apt-get install -y --no-install-recommends ca-certificates curl build-essential pkg-config \
+            qt6-base-dev qt6-declarative-dev qml6-module-qtquick
+          # gh is not in the distro repos, and the release upload runs inside
+          # this container, so install it from GitHub's apt repository.
+          install -d -m 0755 /etc/apt/keyrings
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg
+          chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
+          apt-get update
+          apt-get install -y gh
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.94.0
+          . "$HOME/.cargo/env"
+          cargo install cargo-deb --locked
+      - name: Build + package
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          . "$HOME/.cargo/env"
+          cargo build --release -p sol-qt -p soltool
+          # Depends come from [package.metadata.deb] ($auto + the QML modules);
+          # cargo-deb resolves $auto here via dpkg-shlibdeps against this
+          # distro's own Qt, so one metadata line is correct for both.
+          cargo deb -p sol-qt --no-build --deb-version "$VERSION"
+          mv target/debian/*.deb "classic-solitair_${VERSION}_amd64_${{ matrix.tag }}.deb"
+      - name: Inspect
+        run: dpkg -I classic-solitair_*_${{ matrix.tag }}.deb
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          if [ "${{ needs.prepare.outputs.is_release }}" != "true" ]; then exit 0; fi
+          gh release upload "v$VERSION" classic-solitair_*_${{ matrix.tag }}.deb --repo "${GITHUB_REPOSITORY}" --clobber
+      - if: needs.prepare.outputs.is_release != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with: { name: "deb-${{ matrix.tag }}", path: "*.deb" }
+
+  # Distro-native Arch package: makepkg only runs on Arch, so this builds in an
+  # archlinux container (same reason the debs are per-distro) and ships the
+  # built package plus the PKGBUILD.
+  arch:
+    needs: prepare
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      # The archlinux image ships no git, so actions/checkout would fall back to
+      # an API tarball with no .git and the git archive below would fail; install
+      # git first so checkout clones a real repository.
+      - name: Install git before checkout
+        run: pacman -Sy --noconfirm git
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.ref || github.sha }}
+      - name: Toolchain
+        # github-cli: the release upload runs inside this container.
+        run: pacman -Syu --noconfirm base-devel git namcap rust qt6-base qt6-declarative github-cli
+      - name: Materialize PKGBUILD for this version
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          cp packaging/arch/PKGBUILD .
+          sed -i "s/^pkgver=.*/pkgver=$VERSION/" PKGBUILD
+          git config --global --add safe.directory '*'
+          # makepkg uses a same-named local file over the source= URL (checksums skipped below),
+          # so the dry-run builds without any published tag existing yet.
+          git archive --format=tar.gz \
+            --prefix="classic-solitair-$VERSION/" \
+            -o "classic-solitair-$VERSION.tar.gz" HEAD
+          useradd -m builder && chown -R builder .
+      - name: makepkg + namcap
+        # Build the exact package Arch users consume, and fail the release if it
+        # does not build — shipping an unverified PKGBUILD is how a broken recipe
+        # reached users before. This must run in a clean Arch container because
+        # makepkg enables LTO by default, and LTO makes the cc crate emit cxx-qt's
+        # C++ shims as GCC LTO objects that rustc's bundled rust-lld cannot link;
+        # the PKGBUILD disables it with options=(!lto). namcap stays advisory.
+        run: |
+          sudo -u builder namcap PKGBUILD || true
+          sudo -u builder makepkg -f --skipchecksums --noconfirm
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          if [ "${{ needs.prepare.outputs.is_release }}" != "true" ]; then exit 0; fi
+          gh release upload "v$VERSION" PKGBUILD --repo "${GITHUB_REPOSITORY}" --clobber
+          if ls ./*.pkg.tar.zst >/dev/null 2>&1; then
+            gh release upload "v$VERSION" ./*.pkg.tar.zst --repo "${GITHUB_REPOSITORY}" --clobber
+          fi
+      - if: needs.prepare.outputs.is_release != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: arch
+          path: |
+            PKGBUILD
+            *.pkg.tar.zst
+          if-no-files-found: warn
+
+  checksums:
+    if: needs.prepare.outputs.is_release == 'true'
+    needs: [prepare, windows, linux, deb, arch]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Download every release asset and hash it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          mkdir dl && cd dl
+          gh release download "v$VERSION" --repo "${GITHUB_REPOSITORY}"
+          sha256sum -- * > SHA256SUMS
+          gh release upload "v$VERSION" SHA256SUMS --repo "${GITHUB_REPOSITORY}" --clobber
+
+  publish:
+    if: needs.prepare.outputs.is_release == 'true'
+    needs: [prepare, checksums]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Un-draft the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: gh release edit "v$VERSION" --draft=false --repo "${GITHUB_REPOSITORY}"
