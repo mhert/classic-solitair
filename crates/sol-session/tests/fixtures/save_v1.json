@@ -1,0 +1,80 @@
+{
+  "format_version": 1,
+  "engine_version": "1.0.0",
+  "seed": 8622,
+  "options": {
+    "draw_mode": "One",
+    "scoring": "Standard",
+    "timed": true,
+    "outline_dragging": true,
+    "keep_vegas_score": true,
+    "theme": "midnight",
+    "sounds": false
+  },
+  "log": [
+    {
+      "command": "Draw",
+      "events": [
+        {
+          "CardsMoved": {
+            "from": "Stock",
+            "to": "Waste",
+            "count": 1
+          }
+        }
+      ]
+    },
+    {
+      "command": {
+        "MoveCards": {
+          "from": {
+            "Tableau": 0
+          },
+          "to": {
+            "Foundation": 0
+          },
+          "count": 1
+        }
+      },
+      "events": [
+        {
+          "CardsMoved": {
+            "from": {
+              "Tableau": 0
+            },
+            "to": {
+              "Foundation": 0
+            },
+            "count": 1
+          }
+        },
+        {
+          "ScoreChanged": {
+            "delta": 10
+          }
+        }
+      ]
+    },
+    {
+      "command": {
+        "Tick": {
+          "total_elapsed_secs": 10
+        }
+      },
+      "events": [
+        {
+          "TimeAdvanced": {
+            "total_elapsed_secs": 10
+          }
+        },
+        {
+          "ScoreChanged": {
+            "delta": -2
+          }
+        }
+      ]
+    }
+  ],
+  "bankroll": 0,
+  "elapsed_secs": 10
+}

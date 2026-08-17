@@ -7,5 +7,15 @@ rust-version.workspace = true
 authors.workspace = true
 description = "Cross-game session state: Vegas bankroll, options, versioned save/load."
 
+[dependencies]
+sol-engine = { path = "../sol-engine" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+directories.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
 [lints]
 workspace = true

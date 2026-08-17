@@ -56,3 +56,20 @@ pub use game::{Game, LogEntry};
 pub use pile::{FOUNDATION_COUNT, PileId, TABLEAU_COUNT};
 pub use seed::{Seed, SeedError};
 pub use state::{GameState, TableauPile};
+
+/// This engine build's crate version (`CARGO_PKG_VERSION`), available for
+/// display such as an "About" box or a `--version` flag. It is deliberately
+/// not written into saves: `sol-session` pins a save's `engine_version` to
+/// the save format instead, so the serialized byte layout stays stable across
+/// engine releases.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+#[cfg(test)]
+mod tests {
+    use super::VERSION;
+
+    #[test]
+    fn version_is_non_empty() {
+        assert!(!VERSION.is_empty());
+    }
+}
