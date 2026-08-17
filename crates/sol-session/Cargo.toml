@@ -9,6 +9,7 @@ description = "Cross-game session state: Vegas bankroll, options, versioned save
 
 [dependencies]
 sol-engine = { path = "../sol-engine" }
+sol-theme = { path = "../sol-theme" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

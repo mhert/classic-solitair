@@ -2,7 +2,7 @@
 # https://embarkstudios.github.io/cargo-deny/
 
 [advisories]
-version = 2                              # any advisory = error
+version = 2                              # any advisory = error — no ignores
 
 [licenses]
 version = 2
@@ -12,9 +12,20 @@ allow = [
     # a distinct SPDX identifier from "GPL-3.0" above, needed so our own crates pass this
     # same check rather than just third-party dependencies.
     "GPL-3.0-or-later",
+    # `xbrz-rs`, the pure-Rust xBRZ port behind `sol-xbrz`, is GPLv3 with no
+    # "or-later" grant, so both it and the wrapper that depends on it declare
+    # the conservative "GPL-3.0-only" — a distinct SPDX identifier from the
+    # two above.
+    "GPL-3.0-only",
     "MIT",
     "Apache-2.0",
     "BSD-3-Clause",
+    # arrayref 0.3.9 (via tiny-skia-path, pulled in by both tiny-skia <-
+    # resvg and usvg — the SVG rasterizer stack sol-theme's dimension probe
+    # and sol-render-wgpu's rendering both keep): a two-clause BSD license,
+    # permissive and GPL-compatible — distinct SPDX identifier from the
+    # three-clause BSD above.
+    "BSD-2-Clause",
     "Unicode-3.0",
     "Zlib",
     # option-ext (transitive dep of `directories`): file-level copyleft,

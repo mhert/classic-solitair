@@ -14,6 +14,10 @@ use sol_engine::{DrawMode, GameConfig, ScoringMode};
 /// Serializes as a plain JSON string; deserialization enforces the same
 /// non-empty invariant as the constructors.
 ///
+/// Orders lexicographically on the identifier text, so a `BTreeMap<ThemeId,
+/// _>` — such as [`crate::Settings`]'s per-theme scaling choices — writes its
+/// keys in a stable, deterministic order.
+///
 /// ```
 /// use sol_session::ThemeId;
 ///
@@ -24,7 +28,7 @@ use sol_engine::{DrawMode, GameConfig, ScoringMode};
 /// assert!("".parse::<ThemeId>().is_err());
 /// # Ok::<(), sol_session::ThemeIdError>(())
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct ThemeId(String);
 

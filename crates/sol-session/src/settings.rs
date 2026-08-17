@@ -9,9 +9,12 @@
 //! snapshot of whatever game state was current when a game was last saved —
 //! never the live settings source of truth.
 
-use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
-use crate::options::Options;
+use serde::{Deserialize, Serialize};
+use sol_theme::CardScaling;
+
+use crate::options::{Options, ThemeId};
 
 /// The settings format version this build writes, and the only version it
 /// accepts on load. Bumping it is a breaking format change, versioned
@@ -84,6 +87,13 @@ pub struct Settings {
     pub options: Options,
     /// The presenter's index into the active theme's declared card backs.
     pub back_index: usize,
+    /// The player's card-scaling choice per theme id. A theme absent from
+    /// the map — and every vector theme, which has no PNG art to scale —
+    /// uses [`CardScaling::Original`].
+    ///
+    /// `BTreeMap` rather than `HashMap` so the written document is
+    /// byte-stable across runs.
+    pub theme_scaling: BTreeMap<ThemeId, CardScaling>,
     /// The main window's restored geometry, or `None` when no geometry has
     /// been recorded yet, or on a platform that exposes no window position
     /// (for example Wayland). Absent from the JSON — never `null` — when
@@ -94,12 +104,13 @@ pub struct Settings {
 
 impl Default for Settings {
     /// [`FORMAT_VERSION`], [`Options::default()`], back index 0, no
-    /// recorded window geometry.
+    /// per-theme scaling choices, no recorded window geometry.
     fn default() -> Self {
         Self {
             format_version: FORMAT_VERSION,
             options: Options::default(),
             back_index: 0,
+            theme_scaling: BTreeMap::new(),
             window: None,
         }
     }
@@ -179,6 +190,8 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
+    use crate::options::ThemeId;
+    use sol_theme::CardScaling;
 
     fn non_default_options() -> Options {
         Options {
@@ -195,6 +208,10 @@ mod tests {
             format_version: FORMAT_VERSION,
             options: non_default_options(),
             back_index: 3,
+            theme_scaling: BTreeMap::from([(
+                ThemeId::try_from(String::from("winter")).unwrap(),
+                CardScaling::Xbrz,
+            )]),
             window: Some(WindowGeometry {
                 width: 1024,
                 height: 768,
@@ -211,6 +228,7 @@ mod tests {
         assert_eq!(settings.format_version, FORMAT_VERSION);
         assert_eq!(settings.options, Options::default());
         assert_eq!(settings.back_index, 0);
+        assert!(settings.theme_scaling.is_empty());
         assert_eq!(settings.window, None);
     }
 
@@ -243,7 +261,7 @@ mod tests {
 
         let mut actual_keys: Vec<&str> = object.keys().map(String::as_str).collect();
         actual_keys.sort_unstable();
-        let mut expected_keys = ["format_version", "options", "back_index"];
+        let mut expected_keys = ["format_version", "options", "back_index", "theme_scaling"];
         expected_keys.sort_unstable();
         assert_eq!(
             actual_keys, expected_keys,
@@ -261,9 +279,20 @@ mod tests {
 
         let mut actual_keys: Vec<&str> = object.keys().map(String::as_str).collect();
         actual_keys.sort_unstable();
-        let mut expected_keys = ["format_version", "options", "back_index", "window"];
+        let mut expected_keys = [
+            "format_version",
+            "options",
+            "back_index",
+            "theme_scaling",
+            "window",
+        ];
         expected_keys.sort_unstable();
         assert_eq!(actual_keys, expected_keys, "top-level keys");
+
+        assert_eq!(
+            object.get("theme_scaling"),
+            Some(&serde_json::json!({"winter": "xbrz"}))
+        );
 
         let window = object.get("window").unwrap().as_object().unwrap();
         let mut actual_window_keys: Vec<&str> = window.keys().map(String::as_str).collect();
@@ -412,5 +441,76 @@ mod tests {
     fn unsupported_format_version_display_matches_exact_string() {
         let error = SettingsError::UnsupportedFormatVersion { found: 42 };
         assert_eq!(error.to_string(), "unsupported settings format version 42");
+    }
+
+    #[test]
+    fn theme_scaling_defaults_to_an_empty_map() {
+        assert!(Settings::default().theme_scaling.is_empty());
+    }
+
+    #[test]
+    fn theme_scaling_round_trips_as_a_json_object() {
+        let mut settings = Settings::default();
+        settings.theme_scaling.insert(
+            ThemeId::try_from(String::from("winter")).unwrap(),
+            CardScaling::Xbrz,
+        );
+        let bytes = settings.to_bytes().unwrap();
+        let text = String::from_utf8(bytes.clone()).unwrap();
+        assert!(text.contains("\"winter\": \"xbrz\""), "{text}");
+        assert_eq!(Settings::from_bytes(&bytes).unwrap(), settings);
+    }
+
+    /// `BTreeMap` orders entries by key regardless of insertion order — the
+    /// reason it was chosen over `HashMap` — so three ids inserted out of
+    /// alphabetical order still land on disk in alphabetical order.
+    #[test]
+    fn theme_scaling_keys_serialize_in_lexicographic_order() {
+        let mut settings = Settings::default();
+        for name in ["winter", "alpine", "summer"] {
+            settings.theme_scaling.insert(
+                ThemeId::try_from(String::from(name)).unwrap(),
+                CardScaling::Xbrz,
+            );
+        }
+        let bytes = settings.to_bytes().unwrap();
+        let text = String::from_utf8(bytes).unwrap();
+
+        let alpine = text.find("\"alpine\"").unwrap();
+        let summer = text.find("\"summer\"").unwrap();
+        let winter = text.find("\"winter\"").unwrap();
+        assert!(alpine < summer && summer < winter, "{text}");
+    }
+
+    /// The strict-parse rule has no per-field tolerance: a document written
+    /// before the field existed is rejected whole, and the caller falls
+    /// back to `Settings::default()` rather than patching it in.
+    #[test]
+    fn a_document_without_theme_scaling_is_malformed() {
+        let mut value = serde_json::to_value(Settings::default()).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("theme_scaling")
+            .unwrap();
+        let bytes = serde_json::to_vec(&value).unwrap();
+        assert!(matches!(
+            Settings::from_bytes(&bytes),
+            Err(SettingsError::Malformed(_))
+        ));
+    }
+
+    /// `ThemeId`'s non-empty invariant applies to map keys too.
+    #[test]
+    fn an_empty_theme_id_key_is_rejected() {
+        let mut value = serde_json::to_value(non_default_settings()).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .insert("theme_scaling".to_owned(), serde_json::json!({"": "xbrz"}));
+        let bytes = serde_json::to_vec(&value).unwrap();
+        let error = Settings::from_bytes(&bytes).unwrap_err();
+        assert!(matches!(error, SettingsError::Malformed(_)));
+        assert!(error.to_string().contains("theme id must not be empty"));
     }
 }

@@ -24,9 +24,33 @@ serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 anyhow = "1"
 serde_json = "1"
+# preserve_order: `[backs]` and `[sounds]` are declaration-ordered maps
+# (sol-theme's Manifest contract) — the default map deserializes tables
+# resorted by key, which loses that order.
+toml = { version = "1", features = ["preserve_order"] }
 proptest = "1"
 directories = "6"
 tempfile = "3"
+# default-features = false + deflate: the only compression method sol-theme's
+# ZipSource / soltool's zip writer need, keeps the dependency tree lean.
+zip = { version = "8", default-features = false, features = ["deflate"] }
+# sol-theme's SVG dimension probe (crates/sol-theme/src/svg.rs) uses this
+# directly for a presence-only guard in front of `usvg` (below): `usvg` itself
+# accepts a dimensionless SVG, silently defaulting/auto-detecting a size that
+# could otherwise pass as a valid card size. Also arrives transitively via
+# `usvg`, so keeping it a direct dependency adds zero tree weight.
+roxmltree = "0.21"
+# Decodes/encodes soltool's shared PNG raster utility (soltool's one place
+# that touches PNG pixels) and backs sol-theme's PNG dimension probe
+# (crates/sol-theme/src/png.rs). sol-theme only reads header/IHDR info via
+# `read_info` there — it never decodes pixel data.
+png = "0.18"
+# Renderer-grade SVG parser backing sol-theme's SVG dimension probe
+# (crates/sol-theme/src/svg.rs) — the same parser the renderer will use, so
+# "sol-theme accepts this SVG" and "the renderer can draw this SVG" become the
+# same statement. default-features = false drops the text/font stack
+# (fontdb/rustybuzz/ttf-parser/...), which a dimension-only probe never needs.
+usvg = { version = "0.47", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

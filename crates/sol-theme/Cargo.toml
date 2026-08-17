@@ -7,5 +7,19 @@ rust-version.workspace = true
 authors.workspace = true
 description = "Theme package format: manifest parsing, asset loading, validation."
 
+[dependencies]
+png.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+zip.workspace = true
+roxmltree.workspace = true
+usvg.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+
 [lints]
 workspace = true
