@@ -25,12 +25,152 @@ which is what makes 32,768 the whole range. Pick one with "Select Game…", or
 | `sol-engine` | Pure event-sourced Klondike rules; no I/O, no clock, no OS RNG (Gameplay context). |
 | `sol-session` | Cross-game state — Vegas bankroll, options, versioned save/load (Session context). |
 | `sol-theme` | Theme package format — manifest parsing, asset loading, validation. |
+| `sol-xbrz` | Safe xBRZ pixel-art upscaler (one `scale_rgba`); the renderer's `png`-theme scaling primitive. |
 | `sol-presenter` | Layout, hit-testing, drag logic, animation timing → sprite display lists. |
 | `sol-render-wgpu` | Batched wgpu sprite renderer for the playfield. |
+| `sol-frontend` | Shared, platform-free application core for the three frontends — theme discovery, state machine, chrome snapshots. |
 | `soltool` | Asset extraction and theme authoring CLI. |
 | `sol-shell` | Minimal winit dev shell to run presenter + renderer before real frontends. |
 | `sol-qt` | Linux frontend — Qt6/QML chrome via cxx-qt, wgpu playfield. |
 | `sol-win32` | Windows frontend — native-windows-gui chrome, Win32 menu bar, wgpu playfield. |
+
+## Architecture
+
+The workspace is organized as a stack of acyclic layers built on a *functional
+core, imperative shell* split. Dependencies point in one direction only —
+downward in the diagram below, toward a pure, deterministic domain that knows
+nothing about pixels, the wall clock, or the operating system. No crate ever
+depends on one above it. Everything from the rules to the on-screen layout can
+be exercised headless, with no window and no GPU, because time, entropy, and
+I/O are injected from the shell at the very top rather than reached for from
+within.
+
+```mermaid
+flowchart TD
+    subgraph T4["Frontends and shells"]
+        qt["sol-qt<br/><i>Qt6/QML chrome · Linux</i>"]
+        win["sol-win32<br/><i>Win32 chrome · Windows</i>"]
+        sh["sol-shell<br/><i>winit dev harness</i>"]
+    end
+    subgraph T3["Rendering and application core"]
+        front["sol-frontend<br/><i>state machine · snapshots</i>"]
+        render["sol-render-wgpu<br/><i>GPU sprite renderer · atlas</i>"]
+    end
+    subgraph T2["Presentation"]
+        pres["sol-presenter<br/><i>layout · hit-test · drag · timing</i>"]
+    end
+    subgraph T1["Session state and offline tooling"]
+        sess["sol-session<br/><i>bankroll · options · save/load</i>"]
+        tool["soltool<br/><i>extract / author CLI</i>"]
+    end
+    subgraph T0["Foundations — pure, no I/O"]
+        eng["sol-engine<br/><i>event-sourced rules</i>"]
+        theme["sol-theme<br/><i>manifest + asset loading</i>"]
+        xbrz["sol-xbrz<br/><i>xBRZ upscaler</i>"]
+    end
+
+    qt --> front
+    win --> front
+    sh --> front
+    qt --> render
+    win --> render
+    sh --> render
+
+    front --> pres
+    front --> sess
+    render -->|DisplayList| pres
+    render --> theme
+    render --> xbrz
+
+    pres --> sess
+    pres --> theme
+    sess --> eng
+    sess --> theme
+    tool --> theme
+
+    classDef core fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20;
+    classDef shell fill:#e3f2fd,stroke:#1565c0,color:#0d47a1;
+    class eng,theme,xbrz,sess,pres,front core;
+    class qt,win,sh,render,tool shell;
+```
+
+*Green crates are the pure, deterministic core — no windowing, no GPU, time and
+entropy handed in by the host. Blue crates are the imperative shell that owns
+the OS, the GPU surface, and disk I/O. Subgraphs are dependency tiers; several
+crates also depend directly on lower tiers for shared types, so the diagram
+shows the defining edges rather than every arrow.*
+
+**Foundations — `sol-engine`, `sol-theme`, `sol-xbrz`.** The engine is
+event-sourced: a player intent enters as a `Command`, `decide` validates it
+against the rules and materializes every consequence (moves, auto-flips, score
+deltas, the win) as `Event`s, and `evolve` folds those events into a
+`GameState` with no rule knowledge at all. A `Game` is nothing more than its
+`(seed, log)`, so undo/redo is log surgery followed by replay, and wall-clock
+time enters solely through `Command::Tick` — there is no clock and no RNG
+inside (the *Gameplay context*). `sol-theme` handles the theme-package format in
+two tiers of its own: a pure manifest layer over `theme.toml`, and a
+byte-oriented loading layer that reads every asset through a single
+`AssetSource` boundary, with the only filesystem and zip code isolated behind
+`DirSource` and `ZipSource`. `sol-xbrz` is a single pure function that upscales
+pixel-art card faces — the renderer's only scaling primitive, and the one crate
+licensed `GPL-3.0-only` because the xBRZ port it wraps is.
+
+**Session state and tooling — `sol-session`, `soltool`.** `sol-session` holds
+everything that outlives a single deal — the Vegas bankroll, user options, and
+versioned save/load — and owns exactly one running `Game` at all times, so there
+is always a deal on the table (Win98-faithful). Its state is platform-free;
+only its `paths` and `storage` modules touch disk (the *Session context*).
+`soltool` is a standalone CLI built on `sol-theme` alone; it is offline
+extraction and authoring tooling, deliberately outside the running game's
+dependency graph.
+
+**Presentation — `sol-presenter`.** The platform-neutral bridge between the
+rules (reached through the owned `Session`) and whatever ends up drawing.
+Frontends feed it pointer and key events plus `advance(dt)` time and drive its
+command/query API from their menus; in return it emits a `DisplayList` of
+sprites. No rendering-API type appears anywhere inside it, and it reads neither
+a clock nor the OS, which is what keeps it portable to future wasm and Android
+shells.
+
+**Rendering and application core — `sol-render-wgpu`, `sol-frontend`.** These
+are siblings, not a stack: the application core is deliberately
+render-agnostic. `sol-render-wgpu` consumes the presenter's `DisplayList` — the
+finalized presenter → renderer seam — and draws it with one batched
+textured-quad pipeline over a texture atlas built from the loaded `Theme`; the
+frontend owns the window, surface, and device, while this crate only turns
+lists into draws. `sol-frontend` is the platform-free core the three frontends
+share: theme discovery, the application state machine, the plain-data snapshots
+the chrome renders (menu model, status line, options, back-picker previews),
+and cutting a rendered card-back sheet into thumbnails. It depends on no
+windowing toolkit and no renderer, so it is tested without a display and gated
+exactly like the domain crates beneath it.
+
+**Frontends and shells — `sol-qt`, `sol-win32`, `sol-shell`.** The imperative
+shell. Each owns a native window, its platform's chrome, and the GPU surface,
+and each wires `sol-frontend` together with `sol-render-wgpu`. They agree on
+everything except chrome and render path: `sol-qt` draws Qt6/QML menus and
+dialogs on Linux, `sol-win32` a native Win32 menu bar on Windows, and
+`sol-shell` is a keyboard-driven winit harness for running the game before
+either real frontend is in play.
+
+**The seams.** Four named boundaries carry everything that crosses between
+layers, and each is inert data with no behavior of its own: `Command` and
+`Event` between a caller and the engine, `DisplayList` between the presenter and
+any renderer, `AssetSource` between a theme and its bytes on disk, and the
+snapshot structs between the application core and each platform's chrome.
+Because every seam is plain data, each layer can be tested against recorded
+values from its neighbors, and a whole new frontend — the planned wasm and
+macOS shells among them — can be added without touching anything below it.
+
+**Enforced discipline.** The purity is mechanical, not conventional.
+`unsafe_code` is `forbid`-level across the whole workspace, the renderer and the
+dev shell included; only the two native frontends step down to `deny` — `sol-qt`
+for its cxx-qt bridge, `sol-win32` for the wgpu-surface handoff and the raw
+Win32 input path — where a handful of scoped, `// SAFETY:`-commented blocks pass
+native window handles across the FFI boundary. The no-panic set is enforced the
+same way: `unwrap`, `expect`, `panic`, `todo`, `unimplemented`, and slice
+indexing are all `deny`-level clippy lints, so a core crate cannot quietly reach
+for a panic or an unchecked index.
 
 ## `soltool`
 
