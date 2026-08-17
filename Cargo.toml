@@ -76,6 +76,35 @@ toml_edit = "0.25"
 # same statement. default-features = false drops the text/font stack
 # (fontdb/rustybuzz/ttf-parser/...), which a dimension-only probe never needs.
 usvg = { version = "0.47", default-features = false }
+# sol-render-wgpu's vector scaling pipeline: rasterizes theme SVGs at the
+# exact target size on scale change. Same version as `usvg` above (resvg's
+# parser IS usvg), so accepting and drawing a theme SVG stay one statement.
+# default-features = false mirrors usvg: no text/font stack, no embedded
+# raster images — theme SVGs are path-only by the format's design.
+resvg = { version = "0.47", default-features = false }
+# The playfield renderer. `webgl` keeps a future wasm build able to fall
+# back to WebGL2 where WebGPU is unavailable (no-op on native targets).
+wgpu = { version = "30", features = ["webgl"] }
+# sol-shell's window/event loop. The dev harness only; sol-qt and
+# sol-win32 bring their own native windowing. default-features = false to
+# drop `wayland-csd-adwaita` (winit's drawn client-side decorations): its
+# font stack bottoms out in the unmaintained `ttf-parser`
+# (RUSTSEC-2026-0192), and this workspace keeps deny advisories at zero
+# ignores. Cost: no fallback titlebar on compositors without server-side
+# decorations — cosmetic only, for a dev harness.
+winit = { version = "0.30", default-features = false, features = [
+    "rwh_06",
+    "x11",
+    "wayland",
+    "wayland-dlopen",
+] }
+# Minimal single-future block_on for wgpu's async adapter/device requests
+# (they resolve immediately on native). Not an async runtime — the
+# workspace stays sync-only (tokio remains banned in deny.toml).
+pollster = "1"
+# Safe zero-copy casts of the renderer's vertex/index/uniform structs to
+# the byte slices wgpu buffer uploads take.
+bytemuck = { version = "1", features = ["derive"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

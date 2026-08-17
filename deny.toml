@@ -28,6 +28,9 @@ allow = [
     "BSD-2-Clause",
     "Unicode-3.0",
     "Zlib",
+    # libloading (transitive dep of wgpu and winit, dynamic GL/Vulkan loader
+    # plumbing): functionally MIT/BSD-2-Clause-equivalent, GPL-compatible.
+    "ISC",
     # option-ext (transitive dep of `directories`): file-level copyleft,
     # GPL-compatible.
     "MPL-2.0",

@@ -1,0 +1,25 @@
+# cargo-mutants scope, matching the coverage decision the CI comments
+# reference: full mutation gates apply to the crates whose behaviour is
+# decidable without a GPU, a window, or a platform toolkit.
+#
+# sol-frontend is deliberately absent from the list below. It holds the
+# frontends' shared application core — save, load, settings persistence,
+# menu state, status text, window placement — and takes its state paths at
+# construction rather than resolving them, so all of that is exercised
+# against a temporary directory in ordinary tests. It is gated.
+#
+# What each excluded crate is gated by instead, stated as what actually
+# exists rather than as an aspiration:
+#
+# - sol-render-wgpu: byte-exact golden-image tests against Mesa's software
+#   rasterizers, plus scaling/atlas smoke tests. A mutation gate would need
+#   a GPU per mutant.
+# - sol-shell: a dev harness. Its winit event loop cannot run headless.
+# - sol-qt, sol-win32: doc-commented skeletons still. Each gains its own
+#   headless self-test along with the frontend it is waiting for.
+exclude_globs = [
+    "crates/sol-render-wgpu/**",
+    "crates/sol-shell/**",
+    "crates/sol-qt/**",
+    "crates/sol-win32/**",
+]

@@ -7,5 +7,20 @@ rust-version.workspace = true
 authors.workspace = true
 description = "Batched wgpu sprite renderer for the playfield."
 
+[dependencies]
+sol-engine = { path = "../sol-engine" }
+sol-presenter = { path = "../sol-presenter" }
+sol-theme = { path = "../sol-theme" }
+sol-xbrz = { path = "../sol-xbrz" }
+bytemuck.workspace = true
+png.workspace = true
+resvg.workspace = true
+thiserror.workspace = true
+wgpu.workspace = true
+
+[dev-dependencies]
+pollster.workspace = true
+sol-session = { path = "../sol-session" }
+
 [lints]
 workspace = true

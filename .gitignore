@@ -3,3 +3,6 @@
 .superpowers/
 nimbalyst-local/
 plans/
+# Failure diagnostics the golden-image test harness writes next to the
+# committed goldens; never commit them.
+*.actual.png

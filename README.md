@@ -41,6 +41,28 @@ The asset extraction and theme authoring CLI. Subcommands:
 - `pack-strip <frame files…> -o <strip.png> --fps <n>` — pack loose frames into
   one horizontal strip PNG and print a ready-to-paste `[backs]` snippet.
 
+## Dev shell
+
+`sol-shell` is the winit development shell: a fully playable game (deal,
+draw, drag-and-drop, double-click to foundation, undo/redo, save/load,
+win cascade) with keyboard shortcuts standing in for the real frontends'
+menus. Run it with:
+
+```sh
+cargo run -p sol-shell                     # default theme, random deal
+cargo run -p sol-shell -- --seed 42        # deal a specific game
+cargo run -p sol-shell -- --theme <path>   # any theme dir or zip
+```
+
+`--help` (also printed at startup) lists the shortcuts: `F2` new deal,
+`G <digits> Enter` select game by seed, `Ctrl+Z`/`Ctrl+Y` undo/redo,
+`Ctrl+S`/`Ctrl+O` save/load, `D`/`M`/`T` draw mode/scoring/timed (next
+deal), `O` outline dragging, `B` cycle card back, `Esc` quit. The board
+fills the window: cards scale continuously with the window height and
+the tableau columns spread across the width exactly as the original
+did; windows narrower than the design aspect fill the width instead,
+with felt below.
+
 ## Default theme
 
 `themes/default/` is the in-tree default theme: 52 original vector card faces, a

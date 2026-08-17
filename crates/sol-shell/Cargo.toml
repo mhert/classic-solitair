@@ -7,5 +7,17 @@ rust-version.workspace = true
 authors.workspace = true
 description = "Minimal winit dev shell to run presenter and renderer before real frontends."
 
+[dependencies]
+sol-engine = { path = "../sol-engine" }
+sol-frontend = { path = "../sol-frontend" }
+sol-presenter = { path = "../sol-presenter" }
+sol-render-wgpu = { path = "../sol-render-wgpu" }
+sol-session = { path = "../sol-session" }
+sol-theme = { path = "../sol-theme" }
+anyhow.workspace = true
+pollster.workspace = true
+wgpu.workspace = true
+winit.workspace = true
+
 [lints]
 workspace = true
