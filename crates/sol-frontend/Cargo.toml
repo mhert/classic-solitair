@@ -1,0 +1,29 @@
+[package]
+name = "sol-frontend"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[dependencies]
+sol-engine = { path = "../sol-engine" }
+sol-presenter = { path = "../sol-presenter" }
+sol-session = { path = "../sol-session" }
+sol-theme = { path = "../sol-theme" }
+# Encodes the card-back preview thumbnails a frontend hands to its
+# toolkit: QML loads one through a data: URI, and the Win32 image list
+# decodes one through WIC, so a single encoder serves both. Also still
+# encodes the tiny png-mode theme fixture the scaling tests boot: the
+# in-tree default theme is vector, so nothing else in this crate loads a
+# png one otherwise.
+png.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# Gives the app-core tests a real directory to save into, so the core can be
+# exercised without touching the developer's own data directory.
+tempfile.workspace = true
+
+[lints]
+workspace = true

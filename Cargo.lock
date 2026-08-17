@@ -865,6 +865,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "sol-frontend"
+version = "0.1.0"
+dependencies = [
+ "png",
+ "sol-engine",
+ "sol-presenter",
+ "sol-session",
+ "sol-theme",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "sol-presenter"
 version = "0.1.0"
 dependencies = [
