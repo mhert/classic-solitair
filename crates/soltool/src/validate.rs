@@ -10,7 +10,7 @@ use sol_theme::{RenderMode, Theme, ThemeError};
 /// Loads and validates the theme package at `theme` — a directory, or a
 /// file tried as a zip archive, exactly [`sol_theme::Theme::load_path`]'s
 /// semantics — returning a one-line summary naming the theme's name,
-/// render mode, and back count on success.
+/// render mode, back count, and placeholder count on success.
 ///
 /// ```
 /// use std::path::Path;
@@ -29,11 +29,14 @@ use sol_theme::{RenderMode, Theme, ThemeError};
 pub fn run(theme: &Path) -> Result<String, ThemeError> {
     let theme = Theme::load_path(theme)?;
     let back_count = theme.backs().len();
+    let placeholder_count = theme.placeholders().entries().count();
     Ok(format!(
-        "{name}: valid ({mode} theme, {back_count} back{plural})",
+        "{name}: valid ({mode} theme, {back_count} back{plural}, \
+         {placeholder_count} placeholder{placeholder_plural})",
         name = theme.manifest.name,
         mode = render_mode_label(theme.manifest.render_mode),
         plural = if back_count == 1 { "" } else { "s" },
+        placeholder_plural = if placeholder_count == 1 { "" } else { "s" },
     ))
 }
 

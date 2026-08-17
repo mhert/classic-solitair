@@ -165,6 +165,50 @@ pub fn encode(image: &RasterImage) -> Result<Vec<u8>, RasterEncodeError> {
     Ok(bytes)
 }
 
+/// `image` with every pixel whose red/green/blue matches one of `keys` made
+/// fully transparent; every other pixel, and every alpha value that is not
+/// keyed out, is left exactly as it was.
+///
+/// Pixels are compared on color alone, so an already-transparent pixel that
+/// happens to carry a keyed color is normalized to a transparent black
+/// rather than left with stale color bytes. A buffer whose length is not a
+/// multiple of four keeps its trailing bytes verbatim, so the result always
+/// has exactly the input's length.
+///
+/// ```
+/// use soltool::raster::{self, RasterImage};
+///
+/// // Two pixels: white, then red. Keying white leaves red untouched.
+/// let image = RasterImage {
+///     width: 2,
+///     height: 1,
+///     pixels: vec![255, 255, 255, 255, 255, 0, 0, 255],
+/// };
+/// let keyed = raster::key_transparent(&image, &[[255, 255, 255]]);
+/// assert_eq!(keyed.pixels, vec![0, 0, 0, 0, 255, 0, 0, 255]);
+/// ```
+#[must_use]
+pub fn key_transparent(image: &RasterImage, keys: &[[u8; 3]]) -> RasterImage {
+    let chunks = image.pixels.chunks_exact(4);
+    let remainder = chunks.remainder();
+    let mut pixels = Vec::with_capacity(image.pixels.len());
+    for pixel in chunks {
+        match *pixel {
+            [red, green, blue, alpha] if !keys.contains(&[red, green, blue]) => {
+                pixels.extend_from_slice(&[red, green, blue, alpha]);
+            }
+            // A keyed color: fully transparent, color bytes zeroed.
+            _ => pixels.extend_from_slice(&[0, 0, 0, 0]),
+        }
+    }
+    pixels.extend_from_slice(remainder);
+    RasterImage {
+        width: image.width,
+        height: image.height,
+        pixels,
+    }
+}
+
 /// `image` with the twelve pixels the original's `cdtDrawExt` never paints
 /// made fully transparent, in each of its `frames` equal-width frames.
 ///
@@ -284,6 +328,91 @@ mod tests {
             width,
             height,
             pixels,
+        }
+    }
+
+    // -- key_transparent --
+
+    #[test]
+    fn keying_clears_only_the_listed_colors() {
+        let source = image(
+            3,
+            1,
+            vec![
+                0xFF, 0xFF, 0xFF, 0xFF, // white: keyed
+                0x00, 0x80, 0x00, 0xFF, // table green: keyed
+                0xFF, 0x00, 0x00, 0xFF, // red ink: kept
+            ],
+        );
+        let keyed = key_transparent(&source, &[[0xFF, 0xFF, 0xFF], [0x00, 0x80, 0x00]]);
+        assert_eq!(
+            keyed.pixels,
+            vec![0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0x00, 0x00, 0xFF]
+        );
+        assert_eq!((keyed.width, keyed.height), (3, 1));
+    }
+
+    #[test]
+    fn keying_nothing_leaves_every_pixel_alone() {
+        let source = image(2, 1, vec![1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(key_transparent(&source, &[]).pixels, source.pixels);
+    }
+
+    #[test]
+    fn keying_preserves_a_kept_pixels_own_alpha() {
+        // A partially transparent, non-keyed pixel keeps its alpha rather
+        // than being forced opaque.
+        let source = image(1, 1, vec![0x10, 0x20, 0x30, 0x77]);
+        assert_eq!(
+            key_transparent(&source, &[[0xFF, 0xFF, 0xFF]]).pixels,
+            vec![0x10, 0x20, 0x30, 0x77]
+        );
+    }
+
+    #[test]
+    fn a_buffer_that_is_not_whole_pixels_keeps_its_trailing_bytes() {
+        let source = image(1, 1, vec![0xFF, 0xFF, 0xFF, 0xFF, 0xAA, 0xBB]);
+        let keyed = key_transparent(&source, &[[0xFF, 0xFF, 0xFF]]);
+        assert_eq!(keyed.pixels, vec![0, 0, 0, 0, 0xAA, 0xBB]);
+        assert_eq!(keyed.pixels.len(), source.pixels.len());
+    }
+
+    /// The property the whole placeholder conversion rests on: for a
+    /// strictly black-and-white source, the original's `SRCAND` blit over
+    /// the table color and alpha compositing the white-keyed image over that
+    /// same color produce identical pixels. Checked over every table color
+    /// channel value, not one sample.
+    #[test]
+    fn keying_white_reproduces_a_srcand_blit_for_black_and_white_pixels() {
+        let source = image(2, 1, vec![0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0xFF]);
+        let keyed = key_transparent(&source, &[[0xFF, 0xFF, 0xFF]]);
+        for channel in 0..=0xFF_u8 {
+            let table = [0x00, channel, 0x00];
+            for (index, pixel) in keyed.pixels.chunks_exact(4).enumerate() {
+                let [red, green, blue, alpha] = <[u8; 4]>::try_from(pixel).unwrap();
+                // Straight-alpha composite over the table color.
+                let over = |ink: u8, back: u8| {
+                    u8::try_from(
+                        (u32::from(ink) * u32::from(alpha)
+                            + u32::from(back) * (255 - u32::from(alpha)))
+                            / 255,
+                    )
+                    .unwrap()
+                };
+                let composited = [
+                    over(red, table[0]),
+                    over(green, table[1]),
+                    over(blue, table[2]),
+                ];
+                // SRCAND of the original source pixel with the table color.
+                let src = if index == 0 {
+                    [0xFF, 0xFF, 0xFF]
+                } else {
+                    [0x00, 0x00, 0x00]
+                };
+                let anded = [src[0] & table[0], src[1] & table[1], src[2] & table[2]];
+                assert_eq!(composited, anded, "channel {channel}, pixel {index}");
+            }
         }
     }
 

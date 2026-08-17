@@ -50,6 +50,9 @@ pub(crate) struct ThemeDoc {
     pub backs: Vec<(String, BackDef)>,
     /// `[table] background`.
     pub background: Background,
+    /// `[placeholders]` entries as `(key, image path)` in declaration
+    /// order; empty omits the section.
+    pub placeholders: Vec<(String, String)>,
     /// `[drag] outline_color`.
     pub outline_color: Color,
     /// `[sounds]` entries in declaration order; empty omits the section.
@@ -91,6 +94,16 @@ pub(crate) fn render(doc: &ThemeDoc) -> String {
         Item::Value(Value::InlineTable(render_background(&doc.background))),
     );
     document.insert("table", Item::Table(table));
+
+    if !doc.placeholders.is_empty() {
+        let mut placeholders = Table::new();
+        for (key, path) in &doc.placeholders {
+            let mut entry = InlineTable::new();
+            entry.insert("image", path.as_str().into());
+            placeholders.insert(key, Item::Value(Value::InlineTable(entry)));
+        }
+        document.insert("placeholders", Item::Table(placeholders));
+    }
 
     let mut drag = Table::new();
     drag.insert(
@@ -272,6 +285,20 @@ mod tests {
                 path: asset_path("table.png"),
                 tile: true,
             },
+            placeholders: vec![
+                (
+                    "empty_pile".to_owned(),
+                    "placeholders/empty_pile.png".to_owned(),
+                ),
+                (
+                    "stock_recycle".to_owned(),
+                    "placeholders/stock_recycle.png".to_owned(),
+                ),
+                (
+                    "stock_blocked".to_owned(),
+                    "placeholders/stock_blocked.png".to_owned(),
+                ),
+            ],
             outline_color: Color::new(0x12, 0x34, 0x56),
             sounds: vec![("deal".to_owned(), "sounds/deal.ogg".to_owned())],
         }
@@ -402,11 +429,13 @@ mod tests {
                 },
             )],
             background: Background::Color(Color::new(0x00, 0x80, 0x00)),
+            placeholders: Vec::new(),
             outline_color: Color::new(0, 0, 0),
             sounds: Vec::new(),
         };
         let toml = render(&doc);
         assert!(!toml.contains("author"), "{toml}");
+        assert!(!toml.contains("[placeholders]"), "{toml}");
         assert!(!toml.contains("[sounds]"), "{toml}");
         assert!(
             toml.contains("background = { color = \"#008000\" }"),

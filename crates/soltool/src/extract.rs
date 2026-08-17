@@ -10,23 +10,46 @@
 //! `theme.toml` is generated, and the whole package is written under
 //! `<theme-dir>` — which must be empty or absent (never clobbered).
 //!
-//! # Face id mapping (the classic `CARDS.DLL` `cdtDraw` layout)
+//! # Face id mapping (the classic `CARDS.DLL` resource layout)
 //!
 //! Resource ids 1..=52 (and the loose numeric convention `1`..`52`) are card
-//! faces in rank-major order with suits clubs, diamonds, hearts, spades:
-//! `id = (rank − 1)·4 + suit_index + 1`, `clubs = 0, diamonds = 1,
-//! hearts = 2, spades = 3`. So id 1 = ace of clubs, id 4 = ace of spades,
-//! id 52 = king of spades. This is the documented `CARDS.DLL` ordering the
-//! original `cdtDraw` API used; the faces are re-emitted under this crate's
-//! canonical `<suit>_<rank>` names (`spades_01`..`clubs_13`).
+//! faces in suit-major blocks of 13, suits ordered clubs, diamonds, hearts,
+//! spades: `id = suit_index·13 + rank`. So id 1 = ace of clubs, id 13 =
+//! king of clubs, id 14 = ace of diamonds, id 52 = king of spades. This is
+//! the *storage* order of the `CARDS.DLL` bitmap resources — deliberately
+//! not the `cdtDraw` API's card index, which interleaves suits rank-major
+//! (aces of clubs/diamonds/hearts/spades, then the twos, …); the DLL
+//! translates between the two internally, and extraction sees only the
+//! storage order. The faces are re-emitted under this crate's canonical
+//! `<suit>_<rank>` names (`spades_01`..`clubs_13`).
 //!
 //! Every *other* integer-id bitmap whose size equals the face size becomes a
-//! static back `back_<id>` (on real `CARDS.DLL` that is the ~12 classic backs
-//! plus the X/O stock overlays — indistinguishable in-resource and harmless
-//! as extra backs). Differently-sized bitmaps are skipped and listed. NE/PE
-//! resources only ever yield *static* backs: the original stores animation
-//! frames in code, not as strip resources. Animated
-//! backs are recognised only for loose directories, via frame-numbered stems.
+//! static back `back_<id>` — except the three the original reuses for pile
+//! slots rather than for cards, which become `[placeholders]` instead (see
+//! below). Differently-sized bitmaps are skipped and listed. NE/PE
+//! resources yield only *static* backs: the original stores animation
+//! frames in code, not as strip resources.
+//!
+//! # Placeholders (resource inputs only)
+//!
+//! Three `CARDS.DLL` bitmaps are drawn where a pile is empty rather than
+//! where a card is, and become `[placeholders]` entries:
+//!
+//! - **53** — the crosshatch ghost, which the original AND-blits over the
+//!   table where a pile is empty.
+//! - **68** — the ring, marking an empty stock the player can still recycle.
+//! - **67** — the cross, marking an empty stock with no pass left.
+//!
+//! None of the three is a card back — the original's deck picker offers only
+//! 54..=65 — so none reaches the deck. The originals encode transparency two
+//! different ways — 53 relies on `SRCAND` (its pixels are strictly black and
+//! white, so white lets the table show through), while 67/68 are copied
+//! opaquely with the table green baked in — but both reduce to the same
+//! alpha conversion: drop white and drop `#008000`. That also frees 67/68
+//! from assuming a green table.
+//!
+//! Loose directories get no placeholders: their classification is by
+//! filename, with no resource ids to recognize.
 //!
 //! # Corner cutout
 //!
@@ -35,9 +58,9 @@
 //! before blitting a card and restores them afterwards, so the bitmap's own
 //! corner pixels never reach the screen. Every classified image is therefore
 //! run through [`raster::cut_card_corners`], which turns those twelve into
-//! straight alpha. It applies to faces and backs (per strip frame) alike, and
-//! to both input kinds — it describes how the original *draws* a card bitmap,
-//! not where that bitmap was stored.
+//! straight alpha. It applies to faces, backs (per strip frame), and the
+//! pile slots alike, and to both input kinds — it describes how the original
+//! *draws* a card bitmap, not where that bitmap was stored.
 //!
 //! Output is for the user's **local use only** — the original artwork must
 //! never be redistributed or committed; the summary says so on every run.
@@ -70,19 +93,32 @@ const DEFAULT_FPS: u32 = 2;
 const LOCAL_USE_NOTICE: &str = "output is for your local use only — the original artwork must never be redistributed or committed";
 /// The built-in fallback back color (`#000080`) when a source yields no backs.
 const FALLBACK_BACK_COLOR: [u8; 3] = [0x00, 0x00, 0x80];
+/// The crosshatch ghost blitted where a pile is empty. Not a card back.
+const EMPTY_PILE_ID: u32 = 53;
+/// The empty-stock cross: no pass left. Not a card back.
+const STOCK_BLOCKED_ID: u32 = 67;
+/// The empty-stock ring: the waste can still be recycled. Not a card back.
+const STOCK_RECYCLE_ID: u32 = 68;
+/// The table green the original bakes into resources 67 and 68.
+const ORIGINAL_TABLE_COLOR: [u8; 3] = [0x00, 0x80, 0x00];
+/// White, which the original's `SRCAND` blit of resource 53 lets the table
+/// show through.
+const PLACEHOLDER_CLEAR_COLOR: [u8; 3] = [0xFF, 0xFF, 0xFF];
 
 /// Extracts the theme at `input` into the directory `output`, returning the
-/// stdout summary (faces, backs, skips, and the local-use notice) on success.
+/// stdout summary (faces, backs, skips, and the local-use notice) on
+/// success.
 ///
 /// # Errors
 ///
-/// Returns [`ExtractError::OutputNotEmpty`] if `output` exists and is not an
-/// empty directory; [`ExtractError::InputUnreadable`],
-/// [`ExtractError::NotExecutable`], or [`ExtractError::UnknownExecutable`] for
-/// an unreadable or unrecognized input; [`ExtractError::Ne`] /
-/// [`ExtractError::Pe`] for a malformed resource container; a face-related
-/// variant if the 52 faces are missing, inconsistent, or ambiguously named; or
-/// [`ExtractError::OutputUnwritable`] if the theme cannot be written.
+/// Returns [`ExtractError::OutputNotEmpty`] if
+/// `output` exists and is not an empty directory;
+/// [`ExtractError::InputUnreadable`], [`ExtractError::NotExecutable`], or
+/// [`ExtractError::UnknownExecutable`] for an unreadable or unrecognized
+/// input; [`ExtractError::Ne`] / [`ExtractError::Pe`] for a malformed
+/// resource container; a face-related variant if the 52 faces are missing,
+/// inconsistent, or ambiguously named; or [`ExtractError::OutputUnwritable`]
+/// if the theme cannot be written.
 pub fn run(input: &Path, output: &Path) -> Result<String, ExtractError> {
     ensure_output_available(output)?;
     let name = input_stem(input);
@@ -96,17 +132,20 @@ pub fn run(input: &Path, output: &Path) -> Result<String, ExtractError> {
 }
 
 /// Applies the original's corner cutout ([`raster::cut_card_corners`]) to
-/// every image it draws as a card: the faces, and each back — per frame, so a
+/// every image it draws as a card: the faces, each back — per frame, so a
 /// loose-detected strip is cut frame by frame rather than once across the
-/// whole strip. Runs on both input kinds, because the cutout is a property of
-/// how the original *draws* a card bitmap, not of where that bitmap was
-/// stored.
+/// whole strip — and the pile slots. Runs on both input kinds, because the
+/// cutout is a property of how the original *draws* a card bitmap, not of
+/// where that bitmap was stored.
 fn cut_corners(theme: &mut ClassifiedTheme) {
     for (_, _, image) in &mut theme.faces {
         *image = raster::cut_card_corners(image, 1);
     }
     for back in &mut theme.backs {
         back.image = raster::cut_card_corners(&back.image, back.frames.unwrap_or(1));
+    }
+    for image in theme.placeholders.images_mut() {
+        *image = raster::cut_card_corners(image, 1);
     }
 }
 
@@ -220,7 +259,8 @@ fn describe_bytes(bytes: &[u8]) -> String {
 // Classification: resources (NE / PE)
 // ---------------------------------------------------------------------------
 
-/// Classifies decoded container bitmaps into 52 faces plus static backs.
+/// Classifies decoded container bitmaps into 52 faces plus backs, diverting
+/// the three pile-slot bitmaps into placeholders.
 fn classify_resources(
     bitmaps: ContainerBitmaps,
     name: String,
@@ -247,22 +287,41 @@ fn classify_resources(
 
     back_candidates.sort_by_key(|(id, _)| *id);
     let mut backs = Vec::new();
+    let mut placeholders = ClassifiedPlaceholders::default();
+    let mut notes = Vec::new();
     for (id, image) in back_candidates {
-        if (image.width, image.height) == base_size {
-            backs.push(ClassifiedBack {
-                name: format!("back_{id:02}"),
-                image,
-                frames: None,
-            });
-        } else {
+        if (image.width, image.height) != base_size {
             skips.push(format!(
                 "resource id {id}: {}x{} does not match the {}x{} card size",
                 image.width, image.height, base_size.0, base_size.1
             ));
+            continue;
         }
+
+        // The empty-stock indicators are not selectable card backs: divert
+        // them so they never reach the deck.
+        if id == STOCK_BLOCKED_ID {
+            placeholders.stock_blocked = Some(as_placeholder(&image));
+            continue;
+        }
+        if id == STOCK_RECYCLE_ID {
+            placeholders.stock_recycle = Some(as_placeholder(&image));
+            continue;
+        }
+        // The crosshatch ghost marks an empty pile, and the original's deck
+        // picker offers only 54..=65: not a selectable card back either.
+        if id == EMPTY_PILE_ID {
+            placeholders.empty_pile = Some(as_placeholder(&image));
+            continue;
+        }
+
+        backs.push(ClassifiedBack {
+            name: format!("back_{id:02}"),
+            image,
+            frames: None,
+        });
     }
 
-    let mut notes = Vec::new();
     if bitmaps.string_named_skipped > 0 {
         notes.push(format!(
             "{} string-named bitmap resource(s) skipped (only integer-id bitmaps map to cards)",
@@ -275,9 +334,21 @@ fn classify_resources(
         base_size,
         faces,
         backs,
+        placeholders,
         skips,
         notes,
     })
+}
+
+/// Converts one of the original's pile-slot bitmaps into a straight-alpha
+/// placeholder by dropping the two colors that stand for "let the table
+/// show through": white (what resource 53's `SRCAND` blit clears, since its
+/// pixels are strictly black and white) and the table green baked into
+/// resources 67 and 68. One rule covers both because the two encodings never
+/// disagree — and dropping the baked green is what lets 67/68 sit on a table
+/// of any color instead of only the original's.
+fn as_placeholder(image: &RasterImage) -> RasterImage {
+    raster::key_transparent(image, &[PLACEHOLDER_CLEAR_COLOR, ORIGINAL_TABLE_COLOR])
 }
 
 /// The canonical `(suit, rank)` for resource id `id`, or `None` if it is not a
@@ -293,8 +364,8 @@ fn resource_face(id: u32) -> Option<(FaceSuit, FaceRank)> {
         FaceSuit::Hearts,
         FaceSuit::Spades,
     ]
-    .get((index % 4) as usize)?;
-    let rank = FaceRank::try_from(u8::try_from(index / 4 + 1).ok()?).ok()?;
+    .get((index / 13) as usize)?;
+    let rank = FaceRank::try_from(u8::try_from(index % 13 + 1).ok()?).ok()?;
     Some((suit, rank))
 }
 
@@ -341,6 +412,9 @@ fn classify_loose(dir: &Path, name: String) -> Result<ClassifiedTheme, ExtractEr
         base_size,
         faces,
         backs,
+        // Loose classification is by filename: there are no resource ids to
+        // recognize, so nothing identifies a pile-slot image.
+        placeholders: ClassifiedPlaceholders::default(),
         skips,
         notes: Vec::new(),
     })
@@ -539,8 +613,53 @@ struct ClassifiedTheme {
     base_size: (u32, u32),
     faces: Faces,
     backs: Vec<ClassifiedBack>,
+    placeholders: ClassifiedPlaceholders,
     skips: Vec<String>,
     notes: Vec<String>,
+}
+
+/// The pile-slot images recovered from a resource input; each is `None` when
+/// the source did not carry its resource. Loose directories leave all three
+/// `None`.
+#[derive(Default)]
+struct ClassifiedPlaceholders {
+    empty_pile: Option<RasterImage>,
+    stock_recycle: Option<RasterImage>,
+    stock_blocked: Option<RasterImage>,
+}
+
+impl ClassifiedPlaceholders {
+    /// Each recovered placeholder as `(theme.toml key, image)`, in a fixed
+    /// order so the written package is deterministic.
+    fn entries(&self) -> impl Iterator<Item = (&'static str, &RasterImage)> {
+        [
+            ("empty_pile", self.empty_pile.as_ref()),
+            ("stock_recycle", self.stock_recycle.as_ref()),
+            ("stock_blocked", self.stock_blocked.as_ref()),
+        ]
+        .into_iter()
+        .filter_map(|(key, image)| image.map(|image| (key, image)))
+    }
+
+    /// Each recovered placeholder, mutably — the counterpart to [`entries`]
+    /// for the passes that rewrite pixels rather than read them.
+    ///
+    /// [`entries`]: ClassifiedPlaceholders::entries
+    fn images_mut(&mut self) -> impl Iterator<Item = &mut RasterImage> {
+        [
+            self.empty_pile.as_mut(),
+            self.stock_recycle.as_mut(),
+            self.stock_blocked.as_mut(),
+        ]
+        .into_iter()
+        .flatten()
+    }
+
+    /// Whether nothing was recovered, in which case the package gets no
+    /// `placeholders/` directory and no `[placeholders]` section.
+    fn is_empty(&self) -> bool {
+        self.entries().next().is_none()
+    }
 }
 
 /// Writes `theme` under `output` (adding a fallback back if none were found)
@@ -572,6 +691,13 @@ fn write_theme(output: &Path, mut theme: ClassifiedTheme) -> Result<String, Extr
         let path = output.join("backs").join(format!("{}.png", back.name));
         write_png(&path, &back.image)?;
     }
+    if !theme.placeholders.is_empty() {
+        write_dir(output.join("placeholders").as_path())?;
+        for (key, image) in theme.placeholders.entries() {
+            let path = output.join("placeholders").join(format!("{key}.png"));
+            write_png(&path, image)?;
+        }
+    }
     let toml_path = output.join("theme.toml");
     let toml = manifest_writer::render(&build_doc(&theme)?);
     std::fs::write(&toml_path, toml).map_err(|error| output_unwritable(&toml_path, &error))?;
@@ -583,8 +709,8 @@ fn write_theme(output: &Path, mut theme: ClassifiedTheme) -> Result<String, Extr
 /// `render_mode = "png"` theme, a `#008000` table and
 /// `#000000` drag outline (the classic Win98 baize), no author or sounds
 /// (extraction recovers neither). Each classified back becomes a static
-/// entry, or a horizontal strip at [`DEFAULT_FPS`] when it carries a frame
-/// count.
+/// entry, or a horizontal strip when it carries a frame count, timed at
+/// [`DEFAULT_FPS`].
 ///
 /// # Errors
 ///
@@ -618,6 +744,11 @@ fn build_doc(theme: &ClassifiedTheme) -> Result<ThemeDoc, ExtractError> {
         base_size: theme.base_size,
         backs,
         background: Background::Color(Color::new(0x00, 0x80, 0x00)),
+        placeholders: theme
+            .placeholders
+            .entries()
+            .map(|(key, _)| (key.to_owned(), format!("placeholders/{key}.png")))
+            .collect(),
         outline_color: Color::new(0x00, 0x00, 0x00),
         sounds: Vec::new(),
     })
@@ -670,8 +801,8 @@ fn write_png(path: &Path, image: &RasterImage) -> Result<(), ExtractError> {
     std::fs::write(path, bytes).map_err(|error| output_unwritable(path, &error))
 }
 
-/// Builds the stdout summary: face/back counts, backs, any skips and notes,
-/// then the mandatory local-use notice.
+/// Builds the stdout summary: face/back counts, backs, recovered
+/// placeholders, any skips and notes, then the mandatory local-use notice.
 fn build_summary(theme: &ClassifiedTheme) -> String {
     let mut out = String::new();
     let _ = writeln!(
@@ -685,6 +816,10 @@ fn build_summary(theme: &ClassifiedTheme) -> String {
     );
     let names: Vec<&str> = theme.backs.iter().map(|back| back.name.as_str()).collect();
     let _ = writeln!(out, "Backs: {}", names.join(", "));
+    let placeholders: Vec<&str> = theme.placeholders.entries().map(|(key, _)| key).collect();
+    if !placeholders.is_empty() {
+        let _ = writeln!(out, "Placeholders: {}", placeholders.join(", "));
+    }
     for note in &theme.notes {
         let _ = writeln!(out, "Note: {note}");
     }
@@ -838,6 +973,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+    use crate::testkit::asset_path;
     use crate::testkit::{Rsrc, build_ne, build_pe, solid_dib};
 
     /// Synthetic card size — a made-up 5×7, never a real dimension.
@@ -868,8 +1004,8 @@ mod tests {
         build_ne(0, &[(RT_BITMAP, entries)]).0
     }
 
-    /// Runs `extract` on `bytes` written as a file input, returning the temp
-    /// dir (kept alive), the output path, and the result.
+    /// Runs `extract` on `bytes` written as a file input, returning the
+    /// temp dir (kept alive), the output path, and the result.
     fn run_file(bytes: &[u8]) -> (tempfile::TempDir, PathBuf, Result<String, ExtractError>) {
         let dir = tempfile::tempdir().unwrap();
         let input = dir.path().join("input.bin");
@@ -877,6 +1013,18 @@ mod tests {
         let output = dir.path().join("out");
         let result = run(&input, &output);
         (dir, output, result)
+    }
+
+    /// The RGBA pixel at `(x, y)` in `image`.
+    fn pixel_at(image: &RasterImage, x: u32, y: u32) -> [u8; 4] {
+        let row_bytes = (image.width as usize) * 4;
+        let start = (y as usize) * row_bytes + (x as usize) * 4;
+        [
+            image.pixels[start],
+            image.pixels[start + 1],
+            image.pixels[start + 2],
+            image.pixels[start + 3],
+        ]
     }
 
     /// A solid-color PNG.
@@ -932,6 +1080,166 @@ mod tests {
         assert!(output.join("theme.toml").is_file());
         assert!(output.join("cards").join("spades_01.png").is_file());
         assert!(output.join("backs").join("back_54.png").is_file());
+    }
+
+    // -- placeholders (ids 53 / 67 / 68) --
+
+    /// The white and table-green pixels the placeholder conversion clears,
+    /// and an ink color it must leave alone.
+    const WHITE: (u8, u8, u8) = (0xFF, 0xFF, 0xFF);
+    const TABLE: (u8, u8, u8) = (0x00, 0x80, 0x00);
+    const INK: (u8, u8, u8) = (0xFF, 0x00, 0x00);
+
+    /// A container carrying all three pile-slot resources plus one ordinary
+    /// back, so the tests can tell diversion from deletion.
+    fn placeholder_entries() -> Vec<(u16, Vec<u8>)> {
+        vec![
+            (int_id(53), solid_dib(W, H, WHITE)),
+            (int_id(54), solid_dib(W, H, (0, 0, 255))),
+            (int_id(67), solid_dib(W, H, INK)),
+            (int_id(68), solid_dib(W, H, TABLE)),
+        ]
+    }
+
+    /// The reported bug: 67 and 68 are the empty-stock indicators, not card
+    /// backs, and must never reach the deck the player picks from.
+    #[test]
+    fn stock_indicator_resources_are_not_offered_as_card_backs() {
+        let (_dir, output, result) = run_file(&ne_image(placeholder_entries()));
+        let summary = result.unwrap();
+        crate::validate::run(&output).unwrap();
+
+        assert!(!summary.contains("back_67"), "{summary}");
+        assert!(!summary.contains("back_68"), "{summary}");
+        assert!(!output.join("backs").join("back_67.png").exists());
+        assert!(!output.join("backs").join("back_68.png").exists());
+        // Diverted, not dropped along with the ordinary back.
+        assert!(summary.contains("1 back"), "{summary}");
+        assert!(summary.contains("back_54"), "{summary}");
+    }
+
+    /// The reported bug: 53 is the empty-pile placeholder, not a card back —
+    /// the original's deck picker offers only 54..=65 — so it must be
+    /// diverted like the stock indicators, never offered as a deck.
+    #[test]
+    fn the_ghost_resource_is_not_offered_as_a_card_back() {
+        let (_dir, output, result) = run_file(&ne_image(placeholder_entries()));
+        let summary = result.unwrap();
+        crate::validate::run(&output).unwrap();
+
+        assert!(!summary.contains("back_53"), "{summary}");
+        assert!(!output.join("backs").join("back_53.png").exists());
+        // Diverted, not dropped: the ghost still lands in `[placeholders]`.
+        assert!(output.join("placeholders").join("empty_pile.png").is_file());
+    }
+
+    #[test]
+    fn every_pile_slot_resource_becomes_a_placeholder() {
+        let (_dir, output, result) = run_file(&ne_image(placeholder_entries()));
+        let summary = result.unwrap();
+        crate::validate::run(&output).unwrap();
+
+        for key in ["empty_pile", "stock_recycle", "stock_blocked"] {
+            assert!(summary.contains(key), "{summary}");
+            assert!(
+                output
+                    .join("placeholders")
+                    .join(format!("{key}.png"))
+                    .is_file(),
+                "{key}"
+            );
+        }
+        let toml = std::fs::read_to_string(output.join("theme.toml")).unwrap();
+        let manifest = sol_theme::Manifest::from_toml_str(&toml).unwrap();
+        assert_eq!(
+            manifest.placeholders.empty_pile,
+            Some(asset_path("placeholders/empty_pile.png"))
+        );
+        assert_eq!(
+            manifest.placeholders.stock_recycle,
+            Some(asset_path("placeholders/stock_recycle.png"))
+        );
+        assert_eq!(
+            manifest.placeholders.stock_blocked,
+            Some(asset_path("placeholders/stock_blocked.png"))
+        );
+    }
+
+    /// The two colors that mean "let the table show through" become
+    /// transparent; ink is untouched. This is what makes the ghost composite
+    /// to the original's `SRCAND` result and frees 67/68 from the baked-in
+    /// green.
+    #[test]
+    fn a_placeholder_clears_white_and_table_green_but_keeps_its_ink() {
+        let (_dir, output, result) = run_file(&ne_image(placeholder_entries()));
+        result.unwrap();
+
+        let read = |name: &str| {
+            let bytes = std::fs::read(output.join("placeholders").join(name)).unwrap();
+            raster::decode(&bytes).unwrap()
+        };
+        // Sampled away from the corners, which the cutout clears in every
+        // image regardless of color.
+        // 53 is solid white -> fully cleared.
+        assert_eq!(pixel_at(&read("empty_pile.png"), 2, 3), [0, 0, 0, 0]);
+        // 68 is solid table green -> fully cleared.
+        assert_eq!(pixel_at(&read("stock_recycle.png"), 2, 3), [0, 0, 0, 0]);
+        // 67 is solid red ink -> kept opaque, unchanged.
+        assert_eq!(
+            pixel_at(&read("stock_blocked.png"), 2, 3),
+            [0xFF, 0x00, 0x00, 0xFF]
+        );
+    }
+
+    /// A source carrying only some of the three yields only those; the
+    /// section must not invent entries the source never had.
+    #[test]
+    fn a_source_without_the_stock_resources_gets_only_the_ghost() {
+        let extra = vec![(int_id(53), solid_dib(W, H, WHITE))];
+        let (_dir, output, result) = run_file(&ne_image(extra));
+        let summary = result.unwrap();
+        crate::validate::run(&output).unwrap();
+
+        assert!(summary.contains("empty_pile"), "{summary}");
+        assert!(!summary.contains("stock_recycle"), "{summary}");
+        assert!(!summary.contains("stock_blocked"), "{summary}");
+        assert!(
+            !output
+                .join("placeholders")
+                .join("stock_recycle.png")
+                .exists()
+        );
+    }
+
+    /// No pile-slot resources at all: no directory, no section, and a theme
+    /// that still validates.
+    #[test]
+    fn a_source_with_no_pile_slot_resources_writes_no_placeholders() {
+        let extra = vec![(int_id(54), solid_dib(W, H, (0, 0, 255)))];
+        let (_dir, output, result) = run_file(&ne_image(extra));
+        let summary = result.unwrap();
+        crate::validate::run(&output).unwrap();
+
+        assert!(!summary.contains("Placeholders:"), "{summary}");
+        assert!(!output.join("placeholders").exists());
+        let toml = std::fs::read_to_string(output.join("theme.toml")).unwrap();
+        assert!(!toml.contains("[placeholders]"), "{toml}");
+    }
+
+    /// Off-size 67/68 are not usable as placeholders, and must still be
+    /// reported rather than vanishing silently.
+    #[test]
+    fn off_size_stock_resources_are_skipped_with_a_note() {
+        let extra = vec![
+            (int_id(53), solid_dib(W, H, WHITE)),
+            (int_id(67), solid_dib(9, 9, INK)),
+        ];
+        let (_dir, output, result) = run_file(&ne_image(extra));
+        let summary = result.unwrap();
+        crate::validate::run(&output).unwrap();
+
+        assert!(summary.contains("9x9 does not match"), "{summary}");
+        assert!(!summary.contains("stock_blocked"), "{summary}");
     }
 
     #[test]
@@ -1026,17 +1334,6 @@ mod tests {
         ]
     }
 
-    /// The RGBA bytes at `(x, y)` of `image`.
-    fn rgba(image: &RasterImage, x: u32, y: u32) -> [u8; 4] {
-        let start = ((y * image.width + x) * 4) as usize;
-        [
-            image.pixels[start],
-            image.pixels[start + 1],
-            image.pixels[start + 2],
-            image.pixels[start + 3],
-        ]
-    }
-
     /// Asserts every frame of `image` (a `frames`-frame strip, or a single
     /// image when `frames` is 1) has its twelve corner pixels cleared.
     fn assert_corners_cut(image: &RasterImage, frames: u32, label: &str) {
@@ -1044,7 +1341,7 @@ mod tests {
         for frame in 0..frames {
             for (x, y) in corner_coords(frame_width, image.height) {
                 assert_eq!(
-                    rgba(image, frame * frame_width + x, y),
+                    pixel_at(image, frame * frame_width + x, y),
                     [0, 0, 0, 0],
                     "{label} frame {frame} pixel ({x}, {y})"
                 );
@@ -1062,11 +1359,7 @@ mod tests {
     /// at every corner of every card.
     #[test]
     fn every_written_card_image_has_the_originals_corners_cut_away() {
-        let extra = vec![
-            (int_id(53), solid_dib(W, H, (0, 255, 0))),
-            (int_id(54), solid_dib(W, H, (0, 0, 255))),
-        ];
-        let (_dir, output, result) = run_file(&ne_image(extra));
+        let (_dir, output, result) = run_file(&ne_image(placeholder_entries()));
         result.unwrap();
         crate::validate::run(&output).unwrap();
 
@@ -1074,15 +1367,18 @@ mod tests {
             "cards/spades_01.png",
             "cards/clubs_13.png",
             "backs/back_54.png",
+            "placeholders/empty_pile.png",
+            "placeholders/stock_recycle.png",
+            "placeholders/stock_blocked.png",
         ] {
             assert_corners_cut(&read_png(&output, relative), 1, relative);
         }
 
-        // Only the corners: an interior pixel of the blue back keeps its
-        // color, so this is a cutout and not a wholesale clear.
+        // Only the corners: an interior pixel of the red-ink stock indicator
+        // keeps its color, so this is a cutout and not a wholesale clear.
         assert_eq!(
-            rgba(&read_png(&output, "backs/back_54.png"), 2, 3),
-            [0x00, 0x00, 0xFF, 0xFF]
+            pixel_at(&read_png(&output, "placeholders/stock_blocked.png"), 2, 3),
+            [0xFF, 0x00, 0x00, 0xFF]
         );
     }
 
@@ -1480,18 +1776,18 @@ mod tests {
 
     #[test]
     fn resource_face_maps_the_cards_dll_layout() {
-        assert_eq!(
-            resource_face(1),
-            Some((FaceSuit::Clubs, FaceRank::try_from(1).unwrap()))
-        );
-        assert_eq!(
-            resource_face(4),
-            Some((FaceSuit::Spades, FaceRank::try_from(1).unwrap()))
-        );
-        assert_eq!(
-            resource_face(52),
-            Some((FaceSuit::Spades, FaceRank::try_from(13).unwrap()))
-        );
+        let face = |suit, rank: u8| Some((suit, FaceRank::try_from(rank).unwrap()));
+        // Suit-major blocks of 13: clubs, diamonds, hearts, spades. The
+        // block boundaries (13/14) and all four block starts pin the
+        // layout; a rank-major misread would turn id 4 into the ace of
+        // spades instead of the four of clubs.
+        assert_eq!(resource_face(1), face(FaceSuit::Clubs, 1));
+        assert_eq!(resource_face(4), face(FaceSuit::Clubs, 4));
+        assert_eq!(resource_face(13), face(FaceSuit::Clubs, 13));
+        assert_eq!(resource_face(14), face(FaceSuit::Diamonds, 1));
+        assert_eq!(resource_face(27), face(FaceSuit::Hearts, 1));
+        assert_eq!(resource_face(40), face(FaceSuit::Spades, 1));
+        assert_eq!(resource_face(52), face(FaceSuit::Spades, 13));
         assert_eq!(resource_face(0), None);
         assert_eq!(resource_face(53), None);
     }
@@ -1606,6 +1902,7 @@ mod tests {
             base_size: (W, H),
             faces: Vec::new(),
             backs: Vec::new(),
+            placeholders: ClassifiedPlaceholders::default(),
             skips: Vec::new(),
             notes: Vec::new(),
         };

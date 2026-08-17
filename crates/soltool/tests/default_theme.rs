@@ -32,6 +32,7 @@ fn the_in_tree_default_theme_validates_green_through_the_real_cli() {
     assert!(stdout.contains("Default"), "{stdout}");
     assert!(stdout.contains("vector"), "{stdout}");
     assert!(stdout.contains("2 backs"), "{stdout}");
+    assert!(stdout.contains("3 placeholders"), "{stdout}");
 }
 
 #[test]
@@ -49,4 +50,15 @@ fn the_in_tree_default_theme_is_vector_with_the_win98_base_size_and_a_two_frame_
         .filter(|(_, back)| back.frame_count == 2)
         .count();
     assert_eq!(two_frame_backs, 1, "expected exactly one 2-frame back");
+
+    // All three placeholder slots, each card-sized like every other asset.
+    let placeholders: Vec<&str> = theme.placeholders().entries().map(|(key, _)| key).collect();
+    assert_eq!(
+        placeholders,
+        vec!["empty_pile", "stock_recycle", "stock_blocked"]
+    );
+    for (key, asset) in theme.placeholders().entries() {
+        assert_eq!(asset.size.width, 71, "{key}");
+        assert_eq!(asset.size.height, 96, "{key}");
+    }
 }
