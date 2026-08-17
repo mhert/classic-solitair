@@ -54,3 +54,18 @@ missing_errors_doc = "deny"
 # Documented pedantic opt-outs — keep this list short and justified.
 module_name_repetitions = "allow"   # e.g. EngineError in module `engine` is fine
 must_use_candidate = "allow"        # apply #[must_use] by judgement, not blanket
+
+# cargo-deb reads this. Depends are filled per-distro by the release job's
+# --depends override (Qt6 package names differ between Ubuntu and Debian);
+# the assets below are distro-independent.
+[package.metadata.deb]
+name = "classic-solitair"
+maintainer = "mhert <mathias@mh.cx>"
+section = "games"
+priority = "optional"
+assets = [
+    ["target/release/sol-qt", "usr/bin/classic-solitair", "755"],
+    ["target/release/soltool", "usr/bin/soltool", "755"],
+    ["../../packaging/linux/classic-solitair.desktop", "usr/share/applications/classic-solitair.desktop", "644"],
+    ["../../packaging/linux/classic-solitair.svg", "usr/share/icons/hicolor/scalable/apps/classic-solitair.svg", "644"],
+]

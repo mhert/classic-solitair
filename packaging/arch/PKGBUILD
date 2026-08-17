@@ -1,0 +1,37 @@
+# Maintainer: mhert <mathias@mh.cx>
+pkgname=classic-solitair
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="A faithful classic Klondike solitaire"
+arch=('x86_64')
+url="https://github.com/mhert/classic-solitair"
+license=('GPL-3.0-or-later')
+depends=('qt6-base' 'qt6-declarative')
+makedepends=('rust' 'cargo')
+
+# Disable makepkg's link-time optimization for this package. With `lto`
+# enabled, makepkg adds -flto to CXXFLAGS, so the cc crate compiles cxx-qt's
+# C++ shim libraries as GCC LTO objects (GIMPLE bitcode in .gnu.lto_* ELF
+# sections). rustc links the final binary with its bundled rust-lld, which
+# does not load GCC's LTO plugin and so cannot see the symbols in those
+# objects — the link fails with dozens of
+# "undefined symbol: rust$cxxqtlib1$cxxbridge1$...$q*" errors. Keeping LTO off
+# leaves the shims as ordinary objects that link cleanly. Rust-level codegen
+# is unaffected (the release profile does not enable Cargo LTO).
+options=(!lto)
+
+source=("$pkgname-$pkgver.tar.gz::https://github.com/mhert/classic-solitair/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+  cd "$srcdir/$pkgname-$pkgver"
+  cargo build --release --locked -p sol-qt -p soltool
+}
+
+package() {
+  cd "$srcdir/$pkgname-$pkgver"
+  install -Dm755 target/release/sol-qt "$pkgdir/usr/bin/$pkgname"
+  install -Dm755 target/release/soltool "$pkgdir/usr/bin/soltool"
+  install -Dm644 packaging/linux/classic-solitair.desktop "$pkgdir/usr/share/applications/$pkgname.desktop"
+  install -Dm644 packaging/linux/classic-solitair.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/$pkgname.svg"
+}
