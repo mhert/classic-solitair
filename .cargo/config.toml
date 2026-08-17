@@ -1,0 +1,13 @@
+# Statically link the MSVC C runtime into the Windows binaries.
+#
+# Rust's x86_64-pc-windows-msvc target dynamically links VCRUNTIME140.dll (the
+# Visual C++ runtime) by default. That DLL ships only with the Microsoft Visual
+# C++ Redistributable, which a clean Windows install does not have — so the
+# released .exe fails to start with "VCRUNTIME140.dll not found". Linking the
+# CRT statically folds it into the executable, so the Windows artifacts are
+# self-contained like every other platform's. The workspace links no C/C++, so
+# there is no runtime shared across a DLL boundary and static linking is safe.
+#
+# Target-scoped: the Linux, wasm, and mingw builds are unaffected.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

@@ -18,8 +18,12 @@
 # - sol-qt: a headless `--smoke` self-test that boots the whole chrome,
 #   instantiates every dialog, runs the render loop, fails on any QML
 #   diagnostic, and asserts the persisted geometry. It runs on CI.
-# - sol-win32: a doc-commented skeleton still. It gains its own headless
-#   self-test along with the frontend it is waiting for.
+# - sol-win32: a smoke test that boots the chrome and renders frames on
+#   WARP, the software DX12 adapter windows-latest carries. It runs on CI.
+#
+# What remains in the two frontend crates after the shared core moved out is
+# chrome: widget construction, event wiring, and a render path, none of
+# which can be constructed off its own platform.
 exclude_globs = [
     "crates/sol-render-wgpu/**",
     "crates/sol-shell/**",

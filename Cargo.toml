@@ -113,6 +113,36 @@ cxx-qt-build = "0.9"
 # Safe zero-copy casts of the renderer's vertex/index/uniform structs to
 # the byte slices wgpu buffer uploads take.
 bytemuck = { version = "1", features = ["derive"] }
+# sol-win32's Win32 chrome (spec-mandated): the real menu bar, native
+# dialogs, and controls. Maintenance-mode but API-stable; Win32 gaps are
+# filled with direct `winapi` calls. Explicit feature list instead of the
+# crate's "everything" default: only what the frontend actually builds.
+# list-view + image-list: the card-back picker is an icon-mode list view
+# over an image list of live thumbnails, not a combo box of theme-author
+# identifiers. image-decoder: what lets `Bitmap::from_bin` take those
+# thumbnails as PNGs through WIC, instead of expecting a raw DIB.
+native-windows-gui = { version = "1.0.13", default-features = false, features = [
+    "menu",
+    "extern-canvas",
+    "status-bar",
+    "combobox",
+    "clipboard",
+    "animation-timer",
+    "cursor",
+    "message-window",
+    "high-dpi",
+    "list-view",
+    "image-list",
+    "image-decoder",
+] }
+# Direct Win32 calls where native-windows-gui has no wrapper (mouse capture
+# during drags, raw pointer/keyboard messages on the playfield). Already
+# native-windows-gui's own backbone, so this adds no new tree weight.
+winapi = { version = "0.3", features = ["winuser", "windef", "minwindef", "commctrl"] }
+# Builds the rwh 0.6 handles wgpu's unsafe surface target takes from
+# native-windows-gui's HWNDs (nwg's own `raw-win-handle` feature is stuck
+# on raw-window-handle 0.3, which wgpu cannot consume).
+raw-window-handle = "0.6"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

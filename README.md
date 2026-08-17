@@ -9,6 +9,15 @@ GPL-3.0-or-later.
 > licensed copy of Windows — the tool reads local files only; it never downloads or
 > redistributes them.
 
+## Game numbers
+
+Games are numbered `0`–`32767`, and game *N* here is the same board the original
+Windows Solitaire deals for *N*: the engine reproduces its shuffle exactly — the
+Microsoft C runtime's `rand`, five passes of its swap shuffle, its deck order and
+its layout. The original picks a game from the low 15 bits of a millisecond clock,
+which is what makes 32,768 the whole range. Pick one with "Select Game…", or
+`--seed`; the status bar always shows the current game's number.
+
 ## Workspace crates
 
 | Crate | Role |
@@ -52,20 +61,45 @@ runtime modules) on Debian/Ubuntu — with `qmake6` on `PATH`.
 
 ```sh
 cargo run -p sol-qt                        # default theme, random deal
-cargo run -p sol-qt -- --seed 42           # deal a specific game
+cargo run -p sol-qt -- --seed 42           # deal game 42 (0–32767)
 cargo run -p sol-qt -- --theme <path>      # any theme dir or zip
 ```
 
 Everything else is in the menus: Game (Deal `F2`, Select Game…, Undo
 `Ctrl+Z`, Redo `Ctrl+Y`, Save, Load, Options…, Exit) and Help (About).
 The Options dialog picks draw mode, scoring, timed play, outline
-dragging, keep-Vegas-score, sounds, and the theme, card back and card
-scaling — all three preview live on the board. User themes are discovered in
+dragging, keep-Vegas-score, sounds, card scaling and the theme; the card
+back is picked from a grid of live thumbnails, animated backs included.
+Theme, back and scaling all preview live on the board behind the dialog,
+with Cancel putting them back. User themes are discovered in
 `~/.local/share/classic-solitair/themes/` (each a theme directory or
 `.zip`), which is where `soltool extract` output belongs. The playfield
 renders offscreen through wgpu and enters the QML scene as an ordinary
 texture, so Wayland and X11 behave identically (rationale in the crate's
 docs).
+
+## Windows frontend
+
+`sol-win32` is the Windows frontend: a real Win32 window with a native
+menu bar, status bar and dialogs (`native-windows-gui`) around the same
+wgpu-rendered playfield, drawn straight onto the window's child canvas.
+It needs no extra system packages beyond a Windows toolchain.
+
+```sh
+cargo run -p sol-win32                     # default theme, random deal
+cargo run -p sol-win32 -- --seed 42        # deal game 42 (0–32767)
+cargo run -p sol-win32 -- --theme <path>   # any theme dir or zip
+```
+
+The menus, options and theme discovery match the Linux frontend exactly —
+both drive the same `sol-frontend` core — except that user themes are
+discovered under `%APPDATA%\classic-solitair\themes\`. The status bar's
+seed part is click-to-copy.
+
+Cross-compiling from Linux works locally with the `x86_64-pc-windows-gnu`
+target (and the tests run under wine), but **no CI job gates it**: the
+Windows job on CI builds and tests natively, so a cross-build regression
+would only surface on a developer's machine.
 
 ## Dev shell
 
@@ -76,7 +110,7 @@ menus. Run it with:
 
 ```sh
 cargo run -p sol-shell                     # default theme, random deal
-cargo run -p sol-shell -- --seed 42        # deal a specific game
+cargo run -p sol-shell -- --seed 42        # deal game 42 (0–32767)
 cargo run -p sol-shell -- --theme <path>   # any theme dir or zip
 ```
 
