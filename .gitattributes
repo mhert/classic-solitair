@@ -1,0 +1,8 @@
+# Normalize all text to LF on checkout so platform-dependent fixtures
+# (compared byte-for-byte against LF-rendered output) never diverge on a
+# CRLF checkout.
+* text=auto eol=lf
+
+# Never touch binary assets.
+*.png binary
+*.zip binary

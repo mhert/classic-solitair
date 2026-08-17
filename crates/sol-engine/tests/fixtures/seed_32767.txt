@@ -1,0 +1,9 @@
+seed=32767
+tableau0 down= up=S1
+tableau1 down=H8 up=C11
+tableau2 down=H5,H13 up=S5
+tableau3 down=S6,H6,S9 up=C8
+tableau4 down=C10,S8,S11,H1 up=H9
+tableau5 down=C3,D1,C2,S7,H7 up=C7
+tableau6 down=H11,D10,C12,S4,C1,S2 up=D8
+stock=C5,S10,D9,S3,H10,S13,H12,D3,D7,H3,C9,C13,D11,D4,C6,D13,H2,D6,S12,H4,C4,D5,D2,D12

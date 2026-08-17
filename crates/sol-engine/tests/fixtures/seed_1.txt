@@ -1,0 +1,9 @@
+seed=1
+tableau0 down= up=D5
+tableau1 down=H7 up=S6
+tableau2 down=D9,D12 up=D10
+tableau3 down=H6,S5,C1 up=D1
+tableau4 down=D13,C11,H2,D3 up=D7
+tableau5 down=S2,C7,S3,H13,S13 up=D4
+tableau6 down=D8,S4,S7,C13,C5,H3 up=H12
+stock=S12,H4,D11,H9,S9,H1,C9,C2,C3,C4,D2,H10,C10,C12,S10,H11,C6,S11,H5,S8,H8,C8,D6,S1
