@@ -4,10 +4,78 @@ A Win98-faithful Klondike Solitaire, written in Rust as a Cargo workspace around
 event-sourced engine, wgpu rendering, and native Qt6/Win32 frontends. Licensed under
 GPL-3.0-or-later.
 
+## Install
+
+Download a prebuilt binary for your platform from the
+**[latest release](https://github.com/mhert/classic-solitair/releases/latest)**
+([all releases](https://github.com/mhert/classic-solitair/releases)). Every
+binary is self-contained — the default theme is embedded — so it runs out of the
+box; `soltool` rides along with the desktop downloads, and a `SHA256SUMS` file
+covers every artifact.
+
+- **Windows** (`x86_64`): run the `-setup.exe` NSIS installer — it adds a
+  Start-menu shortcut and an uninstaller — or unzip the portable `.zip`
+  anywhere and run `classic-solitair.exe` from it.
+- **Linux, any distro**: the `.AppImage` — a single self-contained file that
+  bundles Qt6 and runs without installing anything:
+
+  ```sh
+  chmod +x Classic_Solitair-*.AppImage
+  ./Classic_Solitair-*.AppImage
+  ```
+
+- **Debian / Ubuntu**: install the `.deb` built for your distro (Debian 13 and
+  Ubuntu 24.04); it pulls its Qt6 runtime in through the package manager:
+
+  ```sh
+  sudo apt install ./classic-solitair_*_amd64_debian13.deb   # or …_ubuntu24.04.deb
+  ```
+
+- **Arch**: install the `.pkg.tar.zst` attached to the release with
+  `sudo pacman -U`, or build it yourself from the `PKGBUILD` in
+  [`packaging/arch/`](packaging/arch/PKGBUILD); it needs `qt6-base` and
+  `qt6-declarative`.
+- **From source**: the `.tar.gz` source tarball (or a clone of this repo)
+  builds the Linux frontend and `soltool` with
+  `cargo build --release -p sol-qt -p soltool` — the
+  [Linux frontend](#linux-frontend) section lists the Qt development packages
+  that needs. On Windows, build `sol-win32` instead.
+
 > **Microsoft's original Solitaire artwork is never bundled with this project.** To play
 > with the original look, run `soltool extract` against theme assets from your own
 > licensed copy of Windows — the tool reads local files only; it never downloads or
 > redistributes them.
+
+In practice: point `soltool extract` at the `CARDS.DLL` from that licensed copy
+(Win98 keeps it in `C:\WINDOWS\SYSTEM`; `SOL.EXE` works too — either file alone
+yields the complete theme), and add `--animate` to reconstruct the original's
+four animated card backs. With no `-o` the extracted theme lands straight in
+the per-user themes directory, where the game discovers it — pick it in the
+Options… dialog. Themes obtained any other way go into that same directory,
+each one a theme folder or `.zip`.
+
+No copy of Windows at hand? The Internet Archive preserves [Windows 98 SE as a
+bootable CD image](https://archive.org/details/windows-98-se_202010) — and
+there is no need to install, or even boot, it: on the CD, `CARDS.DLL` sits in
+the cabinet `win98/WIN98_61.CAB` and `SOL.EXE` in `win98/WIN98_67.CAB`. On
+Linux the CD image becomes a playable theme in three commands (`cabextract`'s
+"can't find" warnings about neighbouring cabinets are harmless):
+
+```sh
+bsdtar -xf windows-98-se.iso win98/WIN98_61.CAB
+cabextract -F cards.dll win98/WIN98_61.CAB
+soltool extract --animate --name win98 cards.dll
+# → ~/.local/share/classic-solitair/themes/win98
+```
+
+On Windows no extra tools are needed: double-click the `.iso` to mount it, open
+`win98\WIN98_61.CAB` in Explorer (cabinets open like folders), copy `cards.dll`
+out, and run:
+
+```bat
+soltool.exe extract --animate --name win98 cards.dll
+:: → %APPDATA%\classic-solitair\themes\win98
+```
 
 ## Game numbers
 
