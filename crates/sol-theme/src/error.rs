@@ -79,17 +79,19 @@ pub enum ManifestError {
         back: BackName,
     },
 
-    /// A back gives `frames` on a single-image back without `fps` — not a
-    /// recognized shape.
-    #[error("back `{back}`: `frames` was given without `fps`")]
-    BackFramesWithoutFps {
+    /// A back gives `frames` on a single-image back with no timing key —
+    /// not a recognized shape.
+    #[error("back `{back}`: `frames` was given without `fps` or `durations_ms`")]
+    BackFramesWithoutTiming {
         /// The offending back.
         back: BackName,
     },
 
     /// A back gives `layout` without both `frames` and `fps` present —
     /// `layout` is only meaningful on the strip shape.
-    #[error("back `{back}`: `layout` is only valid together with `frames` and `fps`")]
+    #[error(
+        "back `{back}`: `layout` is only valid together with `frames` and a timing key (`fps` or `durations_ms`)"
+    )]
     BackLayoutWithoutStrip {
         /// The offending back.
         back: BackName,
@@ -153,6 +155,50 @@ pub enum ManifestError {
     BackListWithFramesOrLayout {
         /// The offending back.
         back: BackName,
+    },
+
+    /// An animated back gives both `fps` and `durations_ms` — its timing
+    /// must be exactly one of the two, never both.
+    #[error("back `{back}`: `fps` and `durations_ms` cannot both be given")]
+    BackFpsAndDurations {
+        /// The offending back.
+        back: BackName,
+    },
+
+    /// A back gives `durations_ms` on a single-image back without `frames`
+    /// — durations require a strip; a bare image is always static.
+    #[error("back `{back}`: `durations_ms` was given without `frames`")]
+    BackDurationsWithoutFrames {
+        /// The offending back.
+        back: BackName,
+    },
+
+    /// A back's `durations_ms` length does not match its frame count
+    /// (strip) or image count (list).
+    #[error("back `{back}`: durations_ms has {got} entries, expected {expected}")]
+    BackDurationsLengthMismatch {
+        /// The offending back.
+        back: BackName,
+        /// The required length: `frames` (strip) or the image count (list).
+        expected: u32,
+        /// The number of `durations_ms` entries actually given.
+        got: usize,
+    },
+
+    /// One of a back's `durations_ms` entries is zero.
+    #[error("back `{back}`: every durations_ms entry must be at least 1")]
+    BackZeroDuration {
+        /// The offending back.
+        back: BackName,
+    },
+
+    /// One of a back's `durations_ms` entries does not fit in a u32.
+    #[error("back `{back}`: durations_ms entry {value} must fit in a u32")]
+    BackDurationTooLarge {
+        /// The offending back.
+        back: BackName,
+        /// The rejected duration value.
+        value: i64,
     },
 
     /// `[table] background` has neither `color` nor `image`, or has both.

@@ -47,8 +47,8 @@ use std::fmt::{Display, Write as _};
 use std::path::Path;
 
 use sol_theme::{
-    BackDef, BackLayout, Background, Color, FaceRank, FaceSuit, RelativeAssetPath, RenderMode,
-    canonical_faces,
+    BackDef, BackLayout, BackTiming, Background, Color, FaceRank, FaceSuit, RelativeAssetPath,
+    RenderMode, canonical_faces,
 };
 
 /// The 52 card faces in canonical order, each paired with its decoded image.
@@ -604,7 +604,7 @@ fn build_doc(theme: &ClassifiedTheme) -> Result<ThemeDoc, ExtractError> {
             Some(frames) => BackDef::Strip {
                 image,
                 frames,
-                fps: DEFAULT_FPS,
+                timing: BackTiming::Fps(DEFAULT_FPS),
                 layout: BackLayout::Horizontal,
             },
             None => BackDef::Static { image },

@@ -2,7 +2,7 @@
 //! row 2's extension/format checks as they apply to back images).
 
 use crate::asset::{self, Asset, AssetKind};
-use crate::back::{BackDef, BackLayout, BackName};
+use crate::back::{BackDef, BackLayout, BackName, BackTiming};
 use crate::path::RelativeAssetPath;
 use crate::size::CardSize;
 use crate::source::AssetSource;
@@ -14,9 +14,11 @@ pub struct LoadedBack {
     /// Number of frames: 1 for a static back, `frames` for a strip, the
     /// number of listed images for the list form.
     pub frame_count: u32,
-    /// Playback rate in frames per second — `None` for a static back,
-    /// `Some` for an animated one (strip or list).
-    pub fps: Option<u32>,
+    /// How the back's frames advance over time — `None` for a static back,
+    /// `Some` for an animated one (strip or list), carrying the full timing
+    /// (uniform `fps` or per-frame `durations_ms`) forward unchanged from
+    /// [`BackDef`].
+    pub timing: Option<BackTiming>,
     /// The strip layout axis — `Some` only for the strip shape.
     pub layout: Option<BackLayout>,
     /// The frame image bytes: one asset for static or strip (the whole
@@ -63,7 +65,7 @@ fn load_one(
             let asset = load_frame(source, name, image, kind, base_size)?;
             Ok(LoadedBack {
                 frame_count: 1,
-                fps: None,
+                timing: None,
                 layout: None,
                 assets: vec![asset],
             })
@@ -71,26 +73,26 @@ fn load_one(
         BackDef::Strip {
             image,
             frames,
-            fps,
+            timing,
             layout,
         } => {
             let expected = strip_size(base_size, *frames, *layout);
             let asset = load_frame(source, name, image, kind, expected)?;
             Ok(LoadedBack {
                 frame_count: *frames,
-                fps: Some(*fps),
+                timing: Some(timing.clone()),
                 layout: Some(*layout),
                 assets: vec![asset],
             })
         }
-        BackDef::Frames { images, fps } => {
+        BackDef::Frames { images, timing } => {
             let assets = images
                 .iter()
                 .map(|image| load_frame(source, name, image, kind, base_size))
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(LoadedBack {
                 frame_count: u32::try_from(images.len()).unwrap_or(u32::MAX),
-                fps: Some(*fps),
+                timing: Some(timing.clone()),
                 layout: None,
                 assets,
             })
@@ -167,7 +169,7 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
-    use crate::back::BackLayout;
+    use crate::back::{BackLayout, BackTiming};
     use crate::mem_source::MemSource;
     use crate::testkit::asset_path;
 
@@ -210,7 +212,7 @@ mod tests {
         let back = load_one(&source, &name("plain"), &def, AssetKind::Png, BASE).unwrap();
 
         assert_eq!(back.frame_count, 1);
-        assert_eq!(back.fps, None);
+        assert_eq!(back.timing, None);
         assert_eq!(back.layout, None);
         assert_eq!(back.assets.len(), 1);
         assert_eq!(
@@ -294,14 +296,35 @@ mod tests {
         let def = BackDef::Strip {
             image: asset_path("backs/robot.png"),
             frames: 4,
-            fps: 2,
+            timing: BackTiming::Fps(2),
             layout: BackLayout::Horizontal,
         };
 
         let back = load_one(&source, &name("robot"), &def, AssetKind::Png, BASE).unwrap();
 
         assert_eq!(back.frame_count, 4);
-        assert_eq!(back.fps, Some(2));
+        assert_eq!(back.timing, Some(BackTiming::Fps(2)));
+        assert_eq!(back.layout, Some(BackLayout::Horizontal));
+        assert_eq!(back.assets.len(), 1);
+    }
+
+    #[test]
+    fn a_durations_ms_strip_loads_with_durations_timing() {
+        let source = MemSource::new().with_file("backs/palm.png", png_bytes(71 * 4, 96));
+        let def = BackDef::Strip {
+            image: asset_path("backs/palm.png"),
+            frames: 4,
+            timing: BackTiming::DurationsMs(vec![250, 250, 250, 49_250]),
+            layout: BackLayout::Horizontal,
+        };
+
+        let back = load_one(&source, &name("palm"), &def, AssetKind::Png, BASE).unwrap();
+
+        assert_eq!(back.frame_count, 4);
+        assert_eq!(
+            back.timing,
+            Some(BackTiming::DurationsMs(vec![250, 250, 250, 49_250]))
+        );
         assert_eq!(back.layout, Some(BackLayout::Horizontal));
         assert_eq!(back.assets.len(), 1);
     }
@@ -312,7 +335,7 @@ mod tests {
         let def = BackDef::Strip {
             image: asset_path("backs/robot.png"),
             frames: 3,
-            fps: 1,
+            timing: BackTiming::Fps(1),
             layout: BackLayout::Vertical,
         };
 
@@ -336,7 +359,7 @@ mod tests {
         let def = BackDef::Strip {
             image: asset_path("backs/robot.png"),
             frames: 4,
-            fps: 2,
+            timing: BackTiming::Fps(2),
             layout: BackLayout::Vertical,
         };
 
@@ -359,7 +382,7 @@ mod tests {
         let def = BackDef::Strip {
             image: asset_path("backs/robot.svg"),
             frames: 4,
-            fps: 2,
+            timing: BackTiming::Fps(2),
             layout: BackLayout::Horizontal,
         };
 
@@ -380,13 +403,13 @@ mod tests {
                 asset_path("backs/bats_0.png"),
                 asset_path("backs/bats_1.png"),
             ],
-            fps: 3,
+            timing: BackTiming::Fps(3),
         };
 
         let back = load_one(&source, &name("bats"), &def, AssetKind::Png, BASE).unwrap();
 
         assert_eq!(back.frame_count, 2);
-        assert_eq!(back.fps, Some(3));
+        assert_eq!(back.timing, Some(BackTiming::Fps(3)));
         assert_eq!(back.layout, None);
         assert_eq!(back.assets.len(), 2);
         assert_eq!(
@@ -409,7 +432,7 @@ mod tests {
                 asset_path("backs/bats_0.png"),
                 asset_path("backs/bats_1.png"),
             ],
-            fps: 3,
+            timing: BackTiming::Fps(3),
         };
 
         let error = load_one(&source, &name("bats"), &def, AssetKind::Png, BASE).unwrap_err();
@@ -427,7 +450,7 @@ mod tests {
                 asset_path("backs/bats_0.png"),
                 asset_path("backs/bats_1.png"),
             ],
-            fps: 3,
+            timing: BackTiming::Fps(3),
         };
 
         let error = load_one(&source, &name("bats"), &def, AssetKind::Png, BASE).unwrap_err();

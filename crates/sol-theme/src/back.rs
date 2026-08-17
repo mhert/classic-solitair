@@ -95,6 +95,20 @@ pub enum BackLayout {
     Vertical,
 }
 
+/// How an animated back's frames advance over time.
+///
+/// An animated back ([`BackDef::Strip`] or [`BackDef::Frames`]) carries
+/// exactly one of these — `[backs] <name>` gives either `fps` or
+/// `durations_ms`, never both (see [`crate::ManifestError::BackFpsAndDurations`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BackTiming {
+    /// Uniform playback rate in frames per second (at least 1).
+    Fps(u32),
+    /// Explicit per-frame display duration in milliseconds, one entry per
+    /// frame in frame order (each at least 1).
+    DurationsMs(Vec<u32>),
+}
+
 /// A validated `[backs]` entry, in exactly one of the three recognized
 /// shapes: a single static image, one strip of frames, or a list of
 /// per-frame images.
@@ -117,8 +131,8 @@ pub enum BackDef {
         image: RelativeAssetPath,
         /// Number of frames in the strip (at least 2).
         frames: u32,
-        /// Playback rate in frames per second (at least 1).
-        fps: u32,
+        /// How the strip's frames advance over time.
+        timing: BackTiming,
         /// Which axis the frames are laid out along.
         layout: BackLayout,
     },
@@ -126,8 +140,8 @@ pub enum BackDef {
     Frames {
         /// Validated theme-package-relative paths, one per frame (at least 2).
         images: Vec<RelativeAssetPath>,
-        /// Playback rate in frames per second (at least 1).
-        fps: u32,
+        /// How the list's frames advance over time.
+        timing: BackTiming,
     },
 }
 
@@ -152,6 +166,8 @@ pub(crate) struct RawBackDef {
     #[serde(default)]
     fps: Option<i64>,
     #[serde(default)]
+    durations_ms: Option<Vec<i64>>,
+    #[serde(default)]
     layout: Option<String>,
 }
 
@@ -168,14 +184,108 @@ pub(crate) fn validate(name: &BackName, raw: RawBackDef) -> Result<BackDef, Mani
         image,
         frames,
         fps,
+        durations_ms,
         layout,
     } = raw;
     match image {
-        RawImage::Single(image) => validate_single(name, &image, frames, fps, layout),
+        RawImage::Single(image) => validate_single(name, &image, frames, fps, durations_ms, layout),
         RawImage::Multiple(images) => {
-            validate_multiple(name, &images, frames, fps, layout.is_some())
+            validate_multiple(name, &images, frames, fps, durations_ms, layout.is_some())
         }
     }
+}
+
+/// The requested timing form, once `fps` and `durations_ms` have been
+/// reconciled to at most one of the two (see
+/// [`ManifestError::BackFpsAndDurations`]). `None` means neither was given.
+enum RawTiming {
+    Fps(i64),
+    DurationsMs(Vec<i64>),
+}
+
+/// Reconciles a back's raw `fps` and `durations_ms` into at most one
+/// requested timing form — an animated back's timing is always exactly one
+/// of the two, regardless of shape.
+fn raw_timing(
+    name: &BackName,
+    fps: Option<i64>,
+    durations_ms: Option<Vec<i64>>,
+) -> Result<Option<RawTiming>, ManifestError> {
+    match (fps, durations_ms) {
+        (Some(_), Some(_)) => Err(ManifestError::BackFpsAndDurations { back: name.clone() }),
+        (Some(fps), None) => Ok(Some(RawTiming::Fps(fps))),
+        (None, Some(durations_ms)) => Ok(Some(RawTiming::DurationsMs(durations_ms))),
+        (None, None) => Ok(None),
+    }
+}
+
+/// Validates a strip's `frames` count: must fit `u32` and be at least 2.
+fn validate_frames(name: &BackName, frames: i64) -> Result<u32, ManifestError> {
+    match u32::try_from(frames) {
+        Ok(f) if f >= 2 => Ok(f),
+        Ok(_) => Err(ManifestError::BackTooFewFrames {
+            back: name.clone(),
+            frames,
+        }),
+        Err(_) => Err(ManifestError::BackFramesTooLarge {
+            back: name.clone(),
+            frames,
+        }),
+    }
+}
+
+/// Validates a back's `fps`: must fit `u32` and be at least 1.
+fn validate_fps(name: &BackName, fps: i64) -> Result<u32, ManifestError> {
+    match u32::try_from(fps) {
+        Ok(f) if f >= 1 => Ok(f),
+        Ok(_) => Err(ManifestError::BackZeroFps { back: name.clone() }),
+        Err(_) => Err(ManifestError::BackFpsTooLarge {
+            back: name.clone(),
+            fps,
+        }),
+    }
+}
+
+/// Validates a strip's `layout` axis, defaulting to horizontal when absent.
+fn validate_layout(name: &BackName, layout: Option<String>) -> Result<BackLayout, ManifestError> {
+    match layout {
+        None => Ok(BackLayout::default()),
+        Some(value) if value == "horizontal" => Ok(BackLayout::Horizontal),
+        Some(value) if value == "vertical" => Ok(BackLayout::Vertical),
+        Some(value) => Err(ManifestError::BackInvalidLayout {
+            back: name.clone(),
+            value,
+        }),
+    }
+}
+
+/// Validates `durations_ms` against the required `expected` frame count
+/// (strip) or image count (list): the length must match exactly, and each
+/// duration must fit `u32` and be at least 1.
+fn validate_durations(
+    name: &BackName,
+    durations_ms: Vec<i64>,
+    expected: u32,
+) -> Result<Vec<u32>, ManifestError> {
+    let expected_len = usize::try_from(expected).unwrap_or(usize::MAX);
+    if durations_ms.len() != expected_len {
+        return Err(ManifestError::BackDurationsLengthMismatch {
+            back: name.clone(),
+            expected,
+            got: durations_ms.len(),
+        });
+    }
+    durations_ms
+        .into_iter()
+        .map(|value| match u32::try_from(value) {
+            Ok(duration) if duration >= 1 => Ok(duration),
+            Ok(_) => Err(ManifestError::BackZeroDuration { back: name.clone() }),
+            Err(_) => Err(ManifestError::BackDurationTooLarge {
+                back: name.clone(),
+                value,
+            }),
+        })
+        .collect()
 }
 
 fn validate_single(
@@ -183,53 +293,32 @@ fn validate_single(
     image: &str,
     frames: Option<i64>,
     fps: Option<i64>,
+    durations_ms: Option<Vec<i64>>,
     layout: Option<String>,
 ) -> Result<BackDef, ManifestError> {
-    match (frames, fps) {
-        (Some(frames), Some(fps)) => {
-            let frames = match u32::try_from(frames) {
-                Ok(f) if f >= 2 => f,
-                Ok(_) => {
-                    return Err(ManifestError::BackTooFewFrames {
-                        back: name.clone(),
-                        frames,
-                    });
-                }
-                Err(_) => {
-                    return Err(ManifestError::BackFramesTooLarge {
-                        back: name.clone(),
-                        frames,
-                    });
-                }
-            };
-            let fps = match u32::try_from(fps) {
-                Ok(f) if f >= 1 => f,
-                Ok(_) => {
-                    return Err(ManifestError::BackZeroFps { back: name.clone() });
-                }
-                Err(_) => {
-                    return Err(ManifestError::BackFpsTooLarge {
-                        back: name.clone(),
-                        fps,
-                    });
-                }
-            };
-            let layout = match layout {
-                None => BackLayout::default(),
-                Some(value) if value == "horizontal" => BackLayout::Horizontal,
-                Some(value) if value == "vertical" => BackLayout::Vertical,
-                Some(value) => {
-                    return Err(ManifestError::BackInvalidLayout {
-                        back: name.clone(),
-                        value,
-                    });
-                }
-            };
+    let timing = raw_timing(name, fps, durations_ms)?;
+    match (frames, timing) {
+        (Some(frames), Some(RawTiming::Fps(fps))) => {
+            let frames = validate_frames(name, frames)?;
+            let fps = validate_fps(name, fps)?;
+            let layout = validate_layout(name, layout)?;
             let image = RelativeAssetPath::parse(format!("back `{name}` image"), image)?;
             Ok(BackDef::Strip {
                 image,
                 frames,
-                fps,
+                timing: BackTiming::Fps(fps),
+                layout,
+            })
+        }
+        (Some(frames), Some(RawTiming::DurationsMs(durations_ms))) => {
+            let frames = validate_frames(name, frames)?;
+            let durations = validate_durations(name, durations_ms, frames)?;
+            let layout = validate_layout(name, layout)?;
+            let image = RelativeAssetPath::parse(format!("back `{name}` image"), image)?;
+            Ok(BackDef::Strip {
+                image,
+                frames,
+                timing: BackTiming::DurationsMs(durations),
                 layout,
             })
         }
@@ -240,8 +329,13 @@ fn validate_single(
             let image = RelativeAssetPath::parse(format!("back `{name}` image"), image)?;
             Ok(BackDef::Static { image })
         }
-        (Some(_), None) => Err(ManifestError::BackFramesWithoutFps { back: name.clone() }),
-        (None, Some(_)) => Err(ManifestError::BackFpsWithoutFrames { back: name.clone() }),
+        (Some(_), None) => Err(ManifestError::BackFramesWithoutTiming { back: name.clone() }),
+        (None, Some(RawTiming::Fps(_))) => {
+            Err(ManifestError::BackFpsWithoutFrames { back: name.clone() })
+        }
+        (None, Some(RawTiming::DurationsMs(_))) => {
+            Err(ManifestError::BackDurationsWithoutFrames { back: name.clone() })
+        }
     }
 }
 
@@ -250,6 +344,7 @@ fn validate_multiple(
     images: &[String],
     frames: Option<i64>,
     fps: Option<i64>,
+    durations_ms: Option<Vec<i64>>,
     has_layout: bool,
 ) -> Result<BackDef, ManifestError> {
     if frames.is_some() || has_layout {
@@ -261,22 +356,13 @@ fn validate_multiple(
             count: images.len(),
         });
     }
-    let fps = match fps {
-        Some(value) => match u32::try_from(value) {
-            Ok(f) if f >= 1 => f,
-            Ok(_) => {
-                return Err(ManifestError::BackZeroFps { back: name.clone() });
-            }
-            Err(_) => {
-                return Err(ManifestError::BackFpsTooLarge {
-                    back: name.clone(),
-                    fps: value,
-                });
-            }
-        },
-        None => {
-            return Err(ManifestError::BackZeroFps { back: name.clone() });
+    let timing = match raw_timing(name, fps, durations_ms)? {
+        Some(RawTiming::Fps(fps)) => BackTiming::Fps(validate_fps(name, fps)?),
+        Some(RawTiming::DurationsMs(durations_ms)) => {
+            let expected = u32::try_from(images.len()).unwrap_or(u32::MAX);
+            BackTiming::DurationsMs(validate_durations(name, durations_ms, expected)?)
         }
+        None => return Err(ManifestError::BackZeroFps { back: name.clone() }),
     };
     let mut parsed = Vec::with_capacity(images.len());
     for image in images {
@@ -285,7 +371,7 @@ fn validate_multiple(
     }
     Ok(BackDef::Frames {
         images: parsed,
-        fps,
+        timing,
     })
 }
 
@@ -300,12 +386,14 @@ mod tests {
         image: RawImage,
         frames: Option<i64>,
         fps: Option<i64>,
+        durations_ms: Option<Vec<i64>>,
         layout: Option<&str>,
     ) -> RawBackDef {
         RawBackDef {
             image,
             frames,
             fps,
+            durations_ms,
             layout: layout.map(str::to_owned),
         }
     }
@@ -365,7 +453,11 @@ mod tests {
 
     #[test]
     fn validates_a_bare_image_as_static() {
-        let def = validate(&name(), raw(single("backs/plain.png"), None, None, None)).unwrap();
+        let def = validate(
+            &name(),
+            raw(single("backs/plain.png"), None, None, None, None),
+        )
+        .unwrap();
         assert_eq!(
             def,
             BackDef::Static {
@@ -378,7 +470,7 @@ mod tests {
     fn validates_frames_and_fps_as_a_horizontal_strip_by_default() {
         let def = validate(
             &name(),
-            raw(single("backs/robot.png"), Some(4), Some(2), None),
+            raw(single("backs/robot.png"), Some(4), Some(2), None, None),
         )
         .unwrap();
         assert_eq!(
@@ -386,7 +478,7 @@ mod tests {
             BackDef::Strip {
                 image: asset_path("backs/robot.png"),
                 frames: 4,
-                fps: 2,
+                timing: BackTiming::Fps(2),
                 layout: BackLayout::Horizontal,
             }
         );
@@ -400,6 +492,7 @@ mod tests {
                 single("backs/robot.png"),
                 Some(3),
                 Some(1),
+                None,
                 Some("vertical"),
             ),
         )
@@ -409,7 +502,7 @@ mod tests {
             BackDef::Strip {
                 image: asset_path("backs/robot.png"),
                 frames: 3,
-                fps: 1,
+                timing: BackTiming::Fps(1),
                 layout: BackLayout::Vertical,
             }
         );
@@ -423,6 +516,7 @@ mod tests {
                 single("backs/robot.png"),
                 Some(3),
                 Some(1),
+                None,
                 Some("horizontal"),
             ),
         )
@@ -432,7 +526,7 @@ mod tests {
             BackDef::Strip {
                 image: asset_path("backs/robot.png"),
                 frames: 3,
-                fps: 1,
+                timing: BackTiming::Fps(1),
                 layout: BackLayout::Horizontal,
             }
         );
@@ -447,6 +541,7 @@ mod tests {
                 None,
                 Some(3),
                 None,
+                None,
             ),
         )
         .unwrap();
@@ -457,7 +552,56 @@ mod tests {
                     asset_path("backs/bats_0.png"),
                     asset_path("backs/bats_1.png")
                 ],
-                fps: 3,
+                timing: BackTiming::Fps(3),
+            }
+        );
+    }
+
+    #[test]
+    fn validates_frames_and_durations_ms_as_a_strip() {
+        let def = validate(
+            &name(),
+            raw(
+                single("backs/palm.png"),
+                Some(4),
+                None,
+                Some(vec![250, 250, 250, 49_250]),
+                None,
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            def,
+            BackDef::Strip {
+                image: asset_path("backs/palm.png"),
+                frames: 4,
+                timing: BackTiming::DurationsMs(vec![250, 250, 250, 49_250]),
+                layout: BackLayout::Horizontal,
+            }
+        );
+    }
+
+    #[test]
+    fn validates_a_list_of_paths_with_durations_ms_as_frames() {
+        let def = validate(
+            &name(),
+            raw(
+                multiple(&["backs/bats_0.png", "backs/bats_1.png"]),
+                None,
+                None,
+                Some(vec![100, 200]),
+                None,
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            def,
+            BackDef::Frames {
+                images: vec![
+                    asset_path("backs/bats_0.png"),
+                    asset_path("backs/bats_1.png")
+                ],
+                timing: BackTiming::DurationsMs(vec![100, 200]),
             }
         );
     }
@@ -466,7 +610,7 @@ mod tests {
 
     #[test]
     fn rejects_fps_without_frames() {
-        let error = validate(&name(), raw(single("p.png"), None, Some(2), None)).unwrap_err();
+        let error = validate(&name(), raw(single("p.png"), None, Some(2), None, None)).unwrap_err();
         assert!(matches!(
             error,
             ManifestError::BackFpsWithoutFrames { back } if back == name()
@@ -475,17 +619,20 @@ mod tests {
 
     #[test]
     fn rejects_frames_without_fps() {
-        let error = validate(&name(), raw(single("p.png"), Some(4), None, None)).unwrap_err();
+        let error = validate(&name(), raw(single("p.png"), Some(4), None, None, None)).unwrap_err();
         assert!(matches!(
             error,
-            ManifestError::BackFramesWithoutFps { back } if back == name()
+            ManifestError::BackFramesWithoutTiming { back } if back == name()
         ));
     }
 
     #[test]
     fn rejects_layout_alone_without_frames_or_fps() {
-        let error =
-            validate(&name(), raw(single("p.png"), None, None, Some("vertical"))).unwrap_err();
+        let error = validate(
+            &name(),
+            raw(single("p.png"), None, None, None, Some("vertical")),
+        )
+        .unwrap_err();
         assert!(matches!(
             error,
             ManifestError::BackLayoutWithoutStrip { back } if back == name()
@@ -494,7 +641,8 @@ mod tests {
 
     #[test]
     fn rejects_frames_below_two() {
-        let error = validate(&name(), raw(single("p.png"), Some(1), Some(2), None)).unwrap_err();
+        let error =
+            validate(&name(), raw(single("p.png"), Some(1), Some(2), None, None)).unwrap_err();
         assert!(matches!(
             error,
             ManifestError::BackTooFewFrames { back, frames: 1 } if back == name()
@@ -503,7 +651,8 @@ mod tests {
 
     #[test]
     fn rejects_zero_fps_on_a_strip() {
-        let error = validate(&name(), raw(single("p.png"), Some(4), Some(0), None)).unwrap_err();
+        let error =
+            validate(&name(), raw(single("p.png"), Some(4), Some(0), None, None)).unwrap_err();
         assert!(matches!(
             error,
             ManifestError::BackZeroFps { back } if back == name()
@@ -514,7 +663,7 @@ mod tests {
     fn rejects_an_unrecognized_layout_value() {
         let error = validate(
             &name(),
-            raw(single("p.png"), Some(4), Some(2), Some("diagonal")),
+            raw(single("p.png"), Some(4), Some(2), None, Some("diagonal")),
         )
         .unwrap_err();
         assert!(matches!(
@@ -526,8 +675,11 @@ mod tests {
 
     #[test]
     fn rejects_a_list_of_fewer_than_two_images() {
-        let error =
-            validate(&name(), raw(multiple(&["only.png"]), None, Some(2), None)).unwrap_err();
+        let error = validate(
+            &name(),
+            raw(multiple(&["only.png"]), None, Some(2), None, None),
+        )
+        .unwrap_err();
         assert!(matches!(
             error,
             ManifestError::BackTooFewListImages { back, count: 1 } if back == name()
@@ -538,7 +690,7 @@ mod tests {
     fn rejects_a_list_with_frames_present() {
         let error = validate(
             &name(),
-            raw(multiple(&["a.png", "b.png"]), Some(2), Some(2), None),
+            raw(multiple(&["a.png", "b.png"]), Some(2), Some(2), None, None),
         )
         .unwrap_err();
         assert!(matches!(
@@ -555,6 +707,7 @@ mod tests {
                 multiple(&["a.png", "b.png"]),
                 None,
                 Some(2),
+                None,
                 Some("vertical"),
             ),
         )
@@ -569,7 +722,7 @@ mod tests {
     fn rejects_a_list_missing_fps() {
         let error = validate(
             &name(),
-            raw(multiple(&["a.png", "b.png"]), None, None, None),
+            raw(multiple(&["a.png", "b.png"]), None, None, None, None),
         )
         .unwrap_err();
         assert!(matches!(
@@ -582,7 +735,7 @@ mod tests {
     fn rejects_a_list_with_zero_fps() {
         let error = validate(
             &name(),
-            raw(multiple(&["a.png", "b.png"]), None, Some(0), None),
+            raw(multiple(&["a.png", "b.png"]), None, Some(0), None, None),
         )
         .unwrap_err();
         assert!(matches!(
@@ -591,24 +744,129 @@ mod tests {
         ));
     }
 
+    // -- BackDef: durations_ms (per-frame timing) --
+
+    #[test]
+    fn rejects_fps_and_durations_ms_both_present() {
+        let error = validate(
+            &name(),
+            raw(
+                single("backs/palm.png"),
+                Some(4),
+                Some(2),
+                Some(vec![250, 250, 250, 49_250]),
+                None,
+            ),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            ManifestError::BackFpsAndDurations { back } if back == name()
+        ));
+    }
+
+    #[test]
+    fn rejects_durations_ms_without_frames() {
+        let error = validate(
+            &name(),
+            raw(single("p.png"), None, None, Some(vec![250]), None),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            ManifestError::BackDurationsWithoutFrames { back } if back == name()
+        ));
+    }
+
+    #[test]
+    fn rejects_a_durations_ms_length_mismatch() {
+        let error = validate(
+            &name(),
+            raw(
+                single("backs/palm.png"),
+                Some(4),
+                None,
+                Some(vec![250, 250, 250]),
+                None,
+            ),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            ManifestError::BackDurationsLengthMismatch {
+                back,
+                expected: 4,
+                got: 3,
+            } if back == name()
+        ));
+    }
+
+    #[test]
+    fn rejects_a_zero_duration() {
+        let error = validate(
+            &name(),
+            raw(
+                single("backs/palm.png"),
+                Some(4),
+                None,
+                Some(vec![250, 250, 250, 0]),
+                None,
+            ),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            ManifestError::BackZeroDuration { back } if back == name()
+        ));
+    }
+
+    #[test]
+    fn rejects_a_duration_too_large_for_u32() {
+        let overflow = i64::from(u32::MAX) + 1;
+        let error = validate(
+            &name(),
+            raw(
+                single("backs/palm.png"),
+                Some(4),
+                None,
+                Some(vec![250, 250, 250, overflow]),
+                None,
+            ),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            ManifestError::BackDurationTooLarge { back, value }
+                if back == name() && value == overflow
+        ));
+    }
+
     // -- path hygiene --
 
     #[test]
     fn rejects_an_absolute_image_path() {
-        let error = validate(&name(), raw(single("/etc/passwd"), None, None, None)).unwrap_err();
+        let error =
+            validate(&name(), raw(single("/etc/passwd"), None, None, None, None)).unwrap_err();
         assert!(matches!(error, ManifestError::InvalidPath { .. }));
     }
 
     #[test]
     fn rejects_a_parent_segment_in_an_image_path() {
-        let error = validate(&name(), raw(single("../secret.png"), None, None, None)).unwrap_err();
+        let error = validate(
+            &name(),
+            raw(single("../secret.png"), None, None, None, None),
+        )
+        .unwrap_err();
         assert!(matches!(error, ManifestError::InvalidPath { .. }));
     }
 
     #[test]
     fn rejects_a_backslash_in_an_image_path() {
-        let error =
-            validate(&name(), raw(single("backs\\robot.png"), None, None, None)).unwrap_err();
+        let error = validate(
+            &name(),
+            raw(single("backs\\robot.png"), None, None, None, None),
+        )
+        .unwrap_err();
         assert!(matches!(error, ManifestError::InvalidPath { .. }));
     }
 }

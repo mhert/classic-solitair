@@ -52,7 +52,7 @@ pub mod theme_error;
 mod zip_source;
 
 pub use asset::{Asset, AssetKind};
-pub use back::{BackDef, BackLayout, BackName, BackNameError};
+pub use back::{BackDef, BackLayout, BackName, BackNameError, BackTiming};
 pub use background::Background;
 pub use card_scaling::CardScaling;
 pub use color::{Color, ColorError};

@@ -545,7 +545,7 @@ mod tests {
             sol_theme::BackDef::Strip {
                 image: asset_path("robot\"2.png"),
                 frames: 2,
-                fps: 3,
+                timing: sol_theme::BackTiming::Fps(3),
                 layout: sol_theme::BackLayout::Horizontal,
             }
         );

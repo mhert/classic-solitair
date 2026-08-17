@@ -234,7 +234,7 @@ mod tests {
     use zip::write::SimpleFileOptions;
 
     use super::*;
-    use crate::back::BackLayout;
+    use crate::back::{BackLayout, BackTiming};
     use crate::mem_source::MemSource;
     use crate::render_mode::RenderMode;
     use crate::testkit::asset_path;
@@ -463,14 +463,14 @@ mod tests {
         let (plain_name, plain) = backs.first().unwrap();
         assert_eq!(plain_name.as_str(), "plain");
         assert_eq!(plain.frame_count, 1);
-        assert_eq!(plain.fps, None);
+        assert_eq!(plain.timing, None);
         assert_eq!(plain.layout, None);
         assert_eq!(plain.assets.len(), 1);
 
         let (robot_name, robot) = backs.get(1).unwrap();
         assert_eq!(robot_name.as_str(), "robot");
         assert_eq!(robot.frame_count, 4);
-        assert_eq!(robot.fps, Some(2));
+        assert_eq!(robot.timing, Some(BackTiming::Fps(2)));
         assert_eq!(robot.layout, Some(BackLayout::Horizontal));
         assert_eq!(robot.assets.len(), 1);
         assert_eq!(robot.assets.first().unwrap().size.width, 71 * 4);

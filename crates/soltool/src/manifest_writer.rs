@@ -31,7 +31,7 @@
 //!   may render as a multi-line basic string (`"""…"""`) instead of a
 //!   single-line string with `\n` escapes.
 
-use sol_theme::{BackDef, BackLayout, Background, Color, RenderMode};
+use sol_theme::{BackDef, BackLayout, BackTiming, Background, Color, RenderMode};
 use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, Value};
 
 /// Everything [`render`] needs to emit a complete `theme.toml`, expressed in
@@ -128,9 +128,10 @@ fn base_size_array((width, height): (u32, u32)) -> Array {
 }
 
 /// Renders one `[backs]` value in its declared shape: a bare image is
-/// static, `frames`/`fps` a strip (with `layout` only when vertical, since
+/// static, `frames`/timing a strip (with `layout` only when vertical, since
 /// horizontal is the loader's default), a list the multi-file form. Field
-/// order is fixed: `image`, `frames`, `fps`, `layout`.
+/// order is fixed: `image`, `frames`, timing (`fps` or `durations_ms`),
+/// `layout`.
 fn render_back(def: &BackDef) -> InlineTable {
     let mut table = InlineTable::new();
     match def {
@@ -140,26 +141,44 @@ fn render_back(def: &BackDef) -> InlineTable {
         BackDef::Strip {
             image,
             frames,
-            fps,
+            timing,
             layout,
         } => {
             table.insert("image", image.as_str().into());
             table.insert("frames", i64::from(*frames).into());
-            table.insert("fps", i64::from(*fps).into());
+            insert_timing(&mut table, timing);
             if let BackLayout::Vertical = layout {
                 table.insert("layout", "vertical".into());
             }
         }
-        BackDef::Frames { images, fps } => {
+        BackDef::Frames { images, timing } => {
             let mut list = Array::new();
             for image in images {
                 list.push(image.as_str());
             }
             table.insert("image", Value::Array(list));
-            table.insert("fps", i64::from(*fps).into());
+            insert_timing(&mut table, timing);
         }
     }
     table
+}
+
+/// Inserts an animated back's timing as either `fps` (uniform) or
+/// `durations_ms` (per-frame) — the inverse of `sol_theme`'s own
+/// `BackTiming` mapping, so it round-trips through the real parser.
+fn insert_timing(table: &mut InlineTable, timing: &BackTiming) {
+    match timing {
+        BackTiming::Fps(fps) => {
+            table.insert("fps", i64::from(*fps).into());
+        }
+        BackTiming::DurationsMs(durations) => {
+            let mut list = Array::new();
+            for duration in durations {
+                list.push(i64::from(*duration));
+            }
+            table.insert("durations_ms", Value::Array(list));
+        }
+    }
 }
 
 /// Renders `[table] background`: a flat color, or an image with its `tile`
@@ -196,8 +215,8 @@ mod tests {
 
     /// A doc exercising every optional-field and back-shape branch at once:
     /// an author, both render modes (checked separately), each back
-    /// shape (static, horizontal strip, vertical strip, list), an image
-    /// background, and sounds.
+    /// shape (static, horizontal strip, vertical strip, list, and a
+    /// `durations_ms` strip), an image background, and sounds.
     fn rich_doc(render_mode: RenderMode) -> ThemeDoc {
         ThemeDoc {
             name: "Rich \"Quoted\"".to_owned(),
@@ -216,7 +235,7 @@ mod tests {
                     BackDef::Strip {
                         image: asset_path("backs/robot.png"),
                         frames: 4,
-                        fps: 2,
+                        timing: BackTiming::Fps(2),
                         layout: BackLayout::Horizontal,
                     },
                 ),
@@ -225,7 +244,7 @@ mod tests {
                     BackDef::Strip {
                         image: asset_path("backs/lift.png"),
                         frames: 3,
-                        fps: 1,
+                        timing: BackTiming::Fps(1),
                         layout: BackLayout::Vertical,
                     },
                 ),
@@ -236,7 +255,16 @@ mod tests {
                             asset_path("backs/bats_0.png"),
                             asset_path("backs/bats_1.png"),
                         ],
-                        fps: 3,
+                        timing: BackTiming::Fps(3),
+                    },
+                ),
+                (
+                    "palm".to_owned(),
+                    BackDef::Strip {
+                        image: asset_path("backs/palm.png"),
+                        frames: 4,
+                        timing: BackTiming::DurationsMs(vec![250, 250, 250, 49_250]),
+                        layout: BackLayout::Horizontal,
                     },
                 ),
             ],
@@ -268,7 +296,7 @@ mod tests {
         assert_eq!(manifest.render_mode, RenderMode::Png);
         assert_eq!(manifest.base_size.width, 10);
         assert_eq!(manifest.base_size.height, 20);
-        assert_eq!(manifest.backs.len(), 4);
+        assert_eq!(manifest.backs.len(), 5);
         assert_eq!(
             manifest.background,
             Background::Image {
@@ -307,7 +335,7 @@ mod tests {
             BackDef::Strip {
                 image: asset_path("backs/robot.png"),
                 frames: 4,
-                fps: 2,
+                timing: BackTiming::Fps(2),
                 layout: BackLayout::Horizontal,
             }
         );
@@ -316,7 +344,7 @@ mod tests {
             BackDef::Strip {
                 image: asset_path("backs/lift.png"),
                 frames: 3,
-                fps: 1,
+                timing: BackTiming::Fps(1),
                 layout: BackLayout::Vertical,
             }
         );
@@ -327,8 +355,30 @@ mod tests {
                     asset_path("backs/bats_0.png"),
                     asset_path("backs/bats_1.png")
                 ],
-                fps: 3,
+                timing: BackTiming::Fps(3),
             }
+        );
+        assert_eq!(
+            by_name("palm"),
+            BackDef::Strip {
+                image: asset_path("backs/palm.png"),
+                frames: 4,
+                timing: BackTiming::DurationsMs(vec![250, 250, 250, 49_250]),
+                layout: BackLayout::Horizontal,
+            }
+        );
+    }
+
+    #[test]
+    fn a_durations_ms_back_renders_the_documented_syntax() {
+        let toml = render(&rich_doc(RenderMode::Png));
+        assert!(
+            toml.contains("durations_ms = [250, 250, 250, 49250]"),
+            "{toml}"
+        );
+        assert!(
+            !toml.contains("palm = { image = \"backs/palm.png\", frames = 4, fps"),
+            "{toml}"
         );
     }
 

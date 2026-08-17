@@ -210,7 +210,7 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
-    use crate::back::{BackLayout, BackNameError};
+    use crate::back::{BackLayout, BackNameError, BackTiming};
     use crate::size::CardSizeError;
     use crate::testkit::asset_path;
 
@@ -317,7 +317,7 @@ mod tests {
             BackDef::Strip {
                 image: asset_path("backs/robot.png"),
                 frames: 4,
-                fps: 2,
+                timing: BackTiming::Fps(2),
                 layout: BackLayout::Horizontal,
             }
         );
@@ -432,7 +432,7 @@ mod tests {
                     asset_path("backs/bats_0.png"),
                     asset_path("backs/bats_1.png")
                 ],
-                fps: 3,
+                timing: BackTiming::Fps(3),
             }
         );
     }
@@ -592,7 +592,10 @@ mod tests {
             "plain = { image = \"backs/plain.png\", frames = 4 }",
         );
         let error = Manifest::from_toml_str(&text).unwrap_err();
-        assert!(matches!(error, ManifestError::BackFramesWithoutFps { .. }));
+        assert!(matches!(
+            error,
+            ManifestError::BackFramesWithoutTiming { .. }
+        ));
     }
 
     #[test]
@@ -710,6 +713,94 @@ mod tests {
             error,
             ManifestError::BackFpsTooLarge {
                 fps: 99_999_999_999,
+                ..
+            }
+        ));
+    }
+
+    // -- durations_ms (per-frame timing) --
+
+    #[test]
+    fn a_durations_ms_strip_parses_as_a_strip_with_durations_timing() {
+        let text = mutate(
+            "plain = { image = \"backs/plain.png\" }",
+            "palm = { image = \"backs/palm.png\", frames = 4, durations_ms = [250, 250, 250, 49250] }",
+        );
+        let manifest = Manifest::from_toml_str(&text).unwrap();
+        let (name, def) = manifest.backs.first().unwrap();
+        assert_eq!(name.as_str(), "palm");
+        assert_eq!(
+            *def,
+            BackDef::Strip {
+                image: asset_path("backs/palm.png"),
+                frames: 4,
+                timing: BackTiming::DurationsMs(vec![250, 250, 250, 49_250]),
+                layout: BackLayout::Horizontal,
+            }
+        );
+    }
+
+    #[test]
+    fn back_fps_and_durations_ms_is_rejected() {
+        let text = mutate(
+            "plain = { image = \"backs/plain.png\" }",
+            "plain = { image = \"backs/plain.png\", frames = 4, fps = 2, durations_ms = [250, 250, 250, 250] }",
+        );
+        let error = Manifest::from_toml_str(&text).unwrap_err();
+        assert!(matches!(error, ManifestError::BackFpsAndDurations { .. }));
+    }
+
+    #[test]
+    fn back_durations_ms_without_frames_is_rejected() {
+        let text = mutate(
+            "plain = { image = \"backs/plain.png\" }",
+            "plain = { image = \"backs/plain.png\", durations_ms = [250] }",
+        );
+        let error = Manifest::from_toml_str(&text).unwrap_err();
+        assert!(matches!(
+            error,
+            ManifestError::BackDurationsWithoutFrames { .. }
+        ));
+    }
+
+    #[test]
+    fn back_durations_ms_length_mismatch_is_rejected() {
+        let text = mutate(
+            "plain = { image = \"backs/plain.png\" }",
+            "plain = { image = \"backs/plain.png\", frames = 4, durations_ms = [250, 250, 250] }",
+        );
+        let error = Manifest::from_toml_str(&text).unwrap_err();
+        assert!(matches!(
+            error,
+            ManifestError::BackDurationsLengthMismatch {
+                expected: 4,
+                got: 3,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn back_zero_duration_is_rejected() {
+        let text = mutate(
+            "plain = { image = \"backs/plain.png\" }",
+            "plain = { image = \"backs/plain.png\", frames = 4, durations_ms = [250, 250, 250, 0] }",
+        );
+        let error = Manifest::from_toml_str(&text).unwrap_err();
+        assert!(matches!(error, ManifestError::BackZeroDuration { .. }));
+    }
+
+    #[test]
+    fn back_duration_too_large_is_rejected_with_truthful_error() {
+        let text = mutate(
+            "plain = { image = \"backs/plain.png\" }",
+            "plain = { image = \"backs/plain.png\", frames = 4, durations_ms = [250, 250, 250, 99999999999] }",
+        );
+        let error = Manifest::from_toml_str(&text).unwrap_err();
+        assert!(matches!(
+            error,
+            ManifestError::BackDurationTooLarge {
+                value: 99_999_999_999,
                 ..
             }
         ));
