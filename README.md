@@ -41,6 +41,32 @@ The asset extraction and theme authoring CLI. Subcommands:
 - `pack-strip <frame files…> -o <strip.png> --fps <n>` — pack loose frames into
   one horizontal strip PNG and print a ready-to-paste `[backs]` snippet.
 
+## Linux frontend
+
+`sol-qt` is the real Linux frontend: Qt6/QML menus, dialogs, and status
+bar (with the current game's seed always visible and copyable) around
+the wgpu-rendered playfield. Building it needs the Qt 6 development
+packages for QtQuick — `qt6-base` and `qt6-declarative` on Arch,
+`qt6-base-dev` and `qt6-declarative-dev` (plus the `qml6-module-qtquick*`
+runtime modules) on Debian/Ubuntu — with `qmake6` on `PATH`.
+
+```sh
+cargo run -p sol-qt                        # default theme, random deal
+cargo run -p sol-qt -- --seed 42           # deal a specific game
+cargo run -p sol-qt -- --theme <path>      # any theme dir or zip
+```
+
+Everything else is in the menus: Game (Deal `F2`, Select Game…, Undo
+`Ctrl+Z`, Redo `Ctrl+Y`, Save, Load, Options…, Exit) and Help (About).
+The Options dialog picks draw mode, scoring, timed play, outline
+dragging, keep-Vegas-score, sounds, and the theme, card back and card
+scaling — all three preview live on the board. User themes are discovered in
+`~/.local/share/classic-solitair/themes/` (each a theme directory or
+`.zip`), which is where `soltool extract` output belongs. The playfield
+renders offscreen through wgpu and enters the QML scene as an ordinary
+texture, so Wayland and X11 behave identically (rationale in the crate's
+docs).
+
 ## Dev shell
 
 `sol-shell` is the winit development shell: a fully playable game (deal,

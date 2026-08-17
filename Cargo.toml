@@ -102,6 +102,14 @@ winit = { version = "0.30", default-features = false, features = [
 # (they resolve immediately on native). Not an async runtime — the
 # workspace stays sync-only (tokio remains banned in deny.toml).
 pollster = "1"
+# sol-qt's Qt6/QML integration (spec-mandated): the bridge macro crate,
+# the Qt type wrappers, and the build-time C++/moc/qrc glue. qt_full =
+# QtGui + QtQml + QtQuickControls wrappers only — none of cxx-qt-lib's
+# optional third-party conversions (serde/chrono/image/...) are needed.
+cxx = "1"
+cxx-qt = "0.9"
+cxx-qt-lib = { version = "0.9", default-features = false, features = ["qt_full"] }
+cxx-qt-build = "0.9"
 # Safe zero-copy casts of the renderer's vertex/index/uniform structs to
 # the byte slices wgpu buffer uploads take.
 bytemuck = { version = "1", features = ["derive"] }

@@ -6,6 +6,51 @@ license.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 description = "Linux frontend: Qt6/QML chrome via cxx-qt, wgpu playfield."
+build = "build.rs"
 
-[lints]
-workspace = true
+[dependencies]
+sol-engine = { path = "../sol-engine" }
+sol-frontend = { path = "../sol-frontend" }
+sol-presenter = { path = "../sol-presenter" }
+sol-render-wgpu = { path = "../sol-render-wgpu" }
+sol-session = { path = "../sol-session" }
+sol-theme = { path = "../sol-theme" }
+anyhow.workspace = true
+thiserror.workspace = true
+pollster.workspace = true
+wgpu.workspace = true
+cxx.workspace = true
+cxx-qt.workspace = true
+cxx-qt-lib.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[build-dependencies]
+cxx-qt-build.workspace = true
+
+# This crate cannot inherit the workspace `[lints]` table, which forbids unsafe
+# code. It mirrors that table verbatim EXCEPT `unsafe_code = "deny"` (not
+# "forbid"), so the cxx-qt bridge (src/bridge.rs) can opt out with scoped,
+# `// SAFETY:`-commented exceptions.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+# Broad quality net — warn locally, denied in CI via -D warnings.
+pedantic = { level = "warn", priority = -1 }
+
+# The no-panic set — hard errors everywhere, always.
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+indexing_slicing = "deny"
+
+# Documentation discipline.
+missing_errors_doc = "deny"
+
+# Documented pedantic opt-outs — keep this list short and justified.
+module_name_repetitions = "allow"   # e.g. EngineError in module `engine` is fine
+must_use_candidate = "allow"        # apply #[must_use] by judgement, not blanket

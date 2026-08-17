@@ -15,8 +15,11 @@
 #   rasterizers, plus scaling/atlas smoke tests. A mutation gate would need
 #   a GPU per mutant.
 # - sol-shell: a dev harness. Its winit event loop cannot run headless.
-# - sol-qt, sol-win32: doc-commented skeletons still. Each gains its own
-#   headless self-test along with the frontend it is waiting for.
+# - sol-qt: a headless `--smoke` self-test that boots the whole chrome,
+#   instantiates every dialog, runs the render loop, fails on any QML
+#   diagnostic, and asserts the persisted geometry. It runs on CI.
+# - sol-win32: a doc-commented skeleton still. It gains its own headless
+#   self-test along with the frontend it is waiting for.
 exclude_globs = [
     "crates/sol-render-wgpu/**",
     "crates/sol-shell/**",
