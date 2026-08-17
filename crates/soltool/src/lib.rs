@@ -80,7 +80,12 @@ pub use resource::{ContainerBitmaps, ResourceBitmap};
 /// [`validate::run`], and [`pack_strip::run`] respectively.
 pub fn run(command: Command) -> Result<String, ToolError> {
     match command {
-        Command::Extract(args) => Ok(extract::run(&args.input, &args.output, args.animate)?),
+        Command::Extract(args) => Ok(extract::run(
+            &args.input,
+            args.output.as_deref(),
+            args.name.as_deref(),
+            args.animate,
+        )?),
         Command::Validate(args) => Ok(validate::run(&args.theme)?),
         Command::PackStrip(args) => Ok(pack_strip::run(&args.frames, &args.output, args.fps)?),
     }

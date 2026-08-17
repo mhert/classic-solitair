@@ -25,6 +25,26 @@ pub fn run(dir: &Path, args: &[&str]) -> Output {
         .unwrap_or_else(|error| panic!("failed to spawn soltool: {error}"))
 }
 
+/// [`run`], but also sets each `(key, value)` in `envs` as an environment
+/// variable on the spawned child process — never on this test process
+/// itself, so tests exercising platform-specific env (e.g. `XDG_DATA_HOME`)
+/// stay isolated from one another.
+///
+/// # Panics
+///
+/// Panics if the binary could not be spawned at all — a test-environment
+/// precondition, not something under test.
+pub fn run_env(dir: &Path, args: &[&str], envs: &[(&str, &Path)]) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_soltool"));
+    command.args(args).current_dir(dir);
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+    command
+        .output()
+        .unwrap_or_else(|error| panic!("failed to spawn soltool: {error}"))
+}
+
 /// A real, minimal PNG — `width`x`height`, 8-bit grayscale, built via the
 /// `png` crate's encoder — with a genuine IHDR CRC.
 ///

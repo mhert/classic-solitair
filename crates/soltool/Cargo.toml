@@ -12,6 +12,7 @@ clap.workspace = true
 image.workspace = true
 pelite.workspace = true
 png.workspace = true
+sol-session = { path = "../sol-session" }
 sol-theme = { path = "../sol-theme" }
 thiserror.workspace = true
 toml_edit.workspace = true

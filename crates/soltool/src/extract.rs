@@ -74,7 +74,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Display, Write as _};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use sol_theme::{
     BackDef, BackLayout, BackTiming, Background, Color, FaceRank, FaceSuit, RelativeAssetPath,
@@ -117,35 +117,46 @@ const PLACEHOLDER_CLEAR_COLOR: [u8; 3] = [0xFF, 0xFF, 0xFF];
 
 /// Extracts the theme at `input` into the directory `output`, returning the
 /// stdout summary (faces, backs, skips, and the local-use notice) on
-/// success. `animate` reconstructs the four animated card backs from a
-/// resource input's own overlay-sprite resources instead of leaving every
-/// back static; it is rejected outright for a loose-directory input, which
-/// already encodes its own animation via frame-numbered files.
+/// success. `output` defaults to `<themes>/<name>` (the platform themes
+/// directory; see [`sol_session::paths::theme_dir`]) when `None`. `name`
+/// defaults to `input`'s file stem when `None`. `animate` reconstructs the
+/// four animated card backs from a resource input's own overlay-sprite
+/// resources instead of leaving every back static; it is rejected outright
+/// for a loose-directory input, which already encodes its own animation via
+/// frame-numbered files.
 ///
 /// # Errors
 ///
 /// Returns [`ExtractError::AnimateRequiresResourceInput`] if `animate` is
-/// set and `input` is a directory; [`ExtractError::OutputNotEmpty`] if
-/// `output` exists and is not an empty directory;
+/// set and `input` is a directory; [`ExtractError::ThemeDirUnresolved`] if
+/// `output` is `None` and the themes directory cannot be resolved (no home
+/// directory); [`ExtractError::OutputNotEmpty`] if the resolved output
+/// directory exists and is not an empty directory;
 /// [`ExtractError::InputUnreadable`], [`ExtractError::NotExecutable`], or
 /// [`ExtractError::UnknownExecutable`] for an unreadable or unrecognized
 /// input; [`ExtractError::Ne`] / [`ExtractError::Pe`] for a malformed
 /// resource container; a face-related variant if the 52 faces are missing,
 /// inconsistent, or ambiguously named; or [`ExtractError::OutputUnwritable`]
 /// if the theme cannot be written.
-pub fn run(input: &Path, output: &Path, animate: bool) -> Result<String, ExtractError> {
+pub fn run(
+    input: &Path,
+    output: Option<&Path>,
+    name: Option<&str>,
+    animate: bool,
+) -> Result<String, ExtractError> {
     if animate && input.is_dir() {
         return Err(ExtractError::AnimateRequiresResourceInput);
     }
-    ensure_output_available(output)?;
-    let name = input_stem(input);
+    let name = theme_name(name, input);
+    let output_dir = resolve_output_dir(output, &name, sol_session::paths::theme_dir().ok())?;
+    ensure_output_available(&output_dir)?;
     let mut theme = if input.is_dir() {
         classify_loose(input, name)?
     } else {
         classify_file(input, name, animate)?
     };
     cut_corners(&mut theme);
-    write_theme(output, theme)
+    write_theme(&output_dir, theme)
 }
 
 /// Applies the original's corner cutout ([`raster::cut_card_corners`]) to
@@ -778,7 +789,9 @@ fn write_theme(output: &Path, mut theme: ClassifiedTheme) -> Result<String, Extr
     let toml = manifest_writer::render(&build_doc(&theme)?);
     std::fs::write(&toml_path, toml).map_err(|error| output_unwritable(&toml_path, &error))?;
 
-    Ok(build_summary(&theme))
+    let mut summary = build_summary(&theme);
+    let _ = writeln!(summary, "\nWrote theme to {}.", output.display());
+    Ok(summary)
 }
 
 /// Builds the shared [`ThemeDoc`] for a classified extract: a fixed
@@ -941,12 +954,52 @@ fn ensure_output_available(output: &Path) -> Result<(), ExtractError> {
     })
 }
 
-/// The display name for the theme: `input`'s file stem, or `"theme"`.
+/// The display name for the theme: `input`'s file stem, sanitized to a
+/// safe single-segment theme name — never empty, `.`, `..`, or containing a
+/// `/` or `\` separator — falling back to `"theme"` when the stem is
+/// missing or unsafe. This mirrors `cli::parse_theme_name`'s validation of
+/// `--name`, since the result becomes a folder leaf (and the manifest name)
+/// exactly like `--name` does.
 fn input_stem(input: &Path) -> String {
-    input
+    let stem = input
         .file_stem()
         .and_then(std::ffi::OsStr::to_str)
-        .map_or_else(|| "theme".to_owned(), str::to_owned)
+        .unwrap_or_default();
+    if stem.is_empty() || stem == "." || stem == ".." || stem.contains(['/', '\\']) {
+        "theme".to_owned()
+    } else {
+        stem.to_owned()
+    }
+}
+
+/// The theme name: `name`'s value when given, else `input`'s file stem (via
+/// [`input_stem`]).
+fn theme_name(name: Option<&str>, input: &Path) -> String {
+    match name {
+        Some(name) => name.to_owned(),
+        None => input_stem(input),
+    }
+}
+
+/// Resolves the directory to write the theme into: `output` verbatim when
+/// given; otherwise `themes_dir` joined with `name`. `themes_dir` is taken
+/// already resolved so this stays pure — the caller owns looking it up (via
+/// [`sol_session::paths::theme_dir`], which touches the filesystem/env).
+///
+/// # Errors
+///
+/// Returns [`ExtractError::ThemeDirUnresolved`] if `output` is `None` and
+/// `themes_dir` is also `None`.
+fn resolve_output_dir(
+    output: Option<&Path>,
+    name: &str,
+    themes_dir: Option<PathBuf>,
+) -> Result<PathBuf, ExtractError> {
+    match (output, themes_dir) {
+        (Some(output), _) => Ok(output.to_path_buf()),
+        (None, Some(themes_dir)) => Ok(themes_dir.join(name)),
+        (None, None) => Err(ExtractError::ThemeDirUnresolved),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1046,6 +1099,12 @@ pub enum ExtractError {
         /// The rejected output path.
         path: String,
     },
+    /// No `--output`/`-o` was given and the themes directory could not be
+    /// resolved (no home directory).
+    #[error(
+        "could not determine the themes directory (no home directory found); pass --output/-o with an explicit path"
+    )]
+    ThemeDirUnresolved,
     /// A generated asset path is not theme-package-relative.
     #[error(transparent)]
     OutputPath(sol_theme::ManifestError),
@@ -1115,7 +1174,7 @@ mod tests {
         let input = dir.path().join("input.bin");
         std::fs::write(&input, bytes).unwrap();
         let output = dir.path().join("out");
-        let result = run(&input, &output, animate);
+        let result = run(&input, Some(output.as_path()), None, animate);
         (dir, output, result)
     }
 
@@ -1567,7 +1626,7 @@ mod tests {
         write_canonical_faces(&input);
         std::fs::write(input.join("myback.png"), png_bytes(W, H, [7, 7, 7])).unwrap();
         let output = dir.path().join("out");
-        run(&input, &output, false).unwrap();
+        run(&input, Some(output.as_path()), None, false).unwrap();
 
         assert_corners_cut(&read_png(&output, "cards/spades_01.png"), 1, "face");
         assert_corners_cut(&read_png(&output, "backs/myback.png"), 1, "myback");
@@ -1852,7 +1911,7 @@ mod tests {
         std::fs::create_dir(&input).unwrap();
         let output = dir.path().join("out");
 
-        let error = run(&input, &output, true).unwrap_err();
+        let error = run(&input, Some(output.as_path()), None, true).unwrap_err();
 
         assert!(matches!(error, ExtractError::AnimateRequiresResourceInput));
         assert!(error.to_string().contains("--animate"), "{error}");
@@ -1952,7 +2011,12 @@ mod tests {
     #[test]
     fn a_nonexistent_input_file_is_input_unreadable() {
         let dir = tempfile::tempdir().unwrap();
-        let result = run(&dir.path().join("nope.dll"), &dir.path().join("out"), false);
+        let result = run(
+            &dir.path().join("nope.dll"),
+            Some(dir.path().join("out").as_path()),
+            None,
+            false,
+        );
         assert!(matches!(
             result.unwrap_err(),
             ExtractError::InputUnreadable { .. }
@@ -1970,7 +2034,7 @@ mod tests {
         let input = dir.path().join("in.bin");
         std::fs::write(&input, ne_image(vec![])).unwrap();
         assert!(matches!(
-            run(&input, &output, false).unwrap_err(),
+            run(&input, Some(output.as_path()), None, false).unwrap_err(),
             ExtractError::OutputNotEmpty { .. }
         ));
     }
@@ -1982,7 +2046,7 @@ mod tests {
         std::fs::create_dir(&output).unwrap();
         let input = dir.path().join("in.bin");
         std::fs::write(&input, ne_image(vec![])).unwrap();
-        run(&input, &output, false).unwrap();
+        run(&input, Some(output.as_path()), None, false).unwrap();
         crate::validate::run(&output).unwrap();
     }
 
@@ -1997,7 +2061,7 @@ mod tests {
         let input = dir.path().join("in.bin");
         std::fs::write(&input, ne_image(vec![])).unwrap();
         assert!(matches!(
-            run(&input, &output, false).unwrap_err(),
+            run(&input, Some(output.as_path()), None, false).unwrap_err(),
             ExtractError::OutputUnwritable { .. }
         ));
     }
@@ -2010,7 +2074,7 @@ mod tests {
         let input = dir.path().join("in.bin");
         std::fs::write(&input, ne_image(vec![])).unwrap();
         assert!(matches!(
-            run(&input, &output, false).unwrap_err(),
+            run(&input, Some(output.as_path()), None, false).unwrap_err(),
             ExtractError::OutputNotEmpty { .. }
         ));
     }
@@ -2030,7 +2094,7 @@ mod tests {
         std::fs::create_dir(input.join("subdir")).unwrap();
 
         let output = dir.path().join("out");
-        let summary = run(&input, &output, false).unwrap();
+        let summary = run(&input, Some(output.as_path()), None, false).unwrap();
         crate::validate::run(&output).unwrap();
         assert!(summary.contains("castle"), "{summary}");
         assert!(summary.contains("Skipped: nothing"), "{summary}");
@@ -2047,7 +2111,7 @@ mod tests {
             std::fs::write(input.join(format!("{id}.png")), png_bytes(W, H, [1, 2, 3])).unwrap();
         }
         let output = dir.path().join("out");
-        run(&input, &output, false).unwrap();
+        run(&input, Some(output.as_path()), None, false).unwrap();
         crate::validate::run(&output).unwrap();
     }
 
@@ -2060,7 +2124,7 @@ mod tests {
         std::fs::write(input.join("1.png"), png_bytes(W, H, [0, 0, 0])).unwrap();
         let output = dir.path().join("out");
         assert!(matches!(
-            run(&input, &output, false).unwrap_err(),
+            run(&input, Some(output.as_path()), None, false).unwrap_err(),
             ExtractError::LooseMixedConventions
         ));
     }
@@ -2072,7 +2136,7 @@ mod tests {
         std::fs::create_dir(&input).unwrap();
         std::fs::write(input.join("spades_01.png"), png_bytes(W, H, [0, 0, 0])).unwrap();
         let output = dir.path().join("out");
-        let error = run(&input, &output, false).unwrap_err();
+        let error = run(&input, Some(output.as_path()), None, false).unwrap_err();
         assert!(matches!(
             error,
             ExtractError::LooseFacesIncomplete { found: 1 }
@@ -2090,7 +2154,7 @@ mod tests {
         std::fs::write(input.join("spades_01.png"), png_bytes(W + 2, H, [0, 0, 0])).unwrap();
         let output = dir.path().join("out");
         assert!(matches!(
-            run(&input, &output, false).unwrap_err(),
+            run(&input, Some(output.as_path()), None, false).unwrap_err(),
             ExtractError::FaceSizeMismatch(_)
         ));
     }
@@ -2106,7 +2170,7 @@ mod tests {
         std::fs::write(input.join("robot_0.png"), png_bytes(W, H, [1, 0, 0])).unwrap();
         std::fs::write(input.join("robot_1.png"), png_bytes(W, H, [0, 1, 0])).unwrap();
         let output = dir.path().join("out");
-        run(&input, &output, false).unwrap();
+        run(&input, Some(output.as_path()), None, false).unwrap();
         crate::validate::run(&output).unwrap();
 
         let toml = std::fs::read_to_string(output.join("theme.toml")).unwrap();
@@ -2132,7 +2196,7 @@ mod tests {
         // A single-frame group (lone_0) also stays a static back.
         std::fs::write(input.join("lone_0.png"), png_bytes(W, H, [0, 0, 1])).unwrap();
         let output = dir.path().join("out");
-        run(&input, &output, false).unwrap();
+        run(&input, Some(output.as_path()), None, false).unwrap();
         crate::validate::run(&output).unwrap();
 
         let toml = std::fs::read_to_string(output.join("theme.toml")).unwrap();
@@ -2151,7 +2215,7 @@ mod tests {
         write_canonical_faces(&input);
         std::fs::write(input.join("banner.png"), png_bytes(W * 3, H, [0, 0, 0])).unwrap();
         let output = dir.path().join("out");
-        let summary = run(&input, &output, false).unwrap();
+        let summary = run(&input, Some(output.as_path()), None, false).unwrap();
         // Only the fallback back remains; the banner is skipped.
         assert!(summary.contains("does not match"), "{summary}");
         assert!(summary.contains("back_solid"), "{summary}");
@@ -2165,7 +2229,7 @@ mod tests {
         std::fs::write(input.join("broken.bmp"), b"BM not really a bitmap at all").unwrap();
         let output = dir.path().join("out");
         assert!(matches!(
-            run(&input, &output, false).unwrap_err(),
+            run(&input, Some(output.as_path()), None, false).unwrap_err(),
             ExtractError::LooseFileUndecodable { .. }
         ));
     }
@@ -2178,7 +2242,7 @@ mod tests {
         std::fs::write(input.join("broken.png"), b"not a png at all").unwrap();
         let output = dir.path().join("out");
         assert!(matches!(
-            run(&input, &output, false).unwrap_err(),
+            run(&input, Some(output.as_path()), None, false).unwrap_err(),
             ExtractError::LooseFileUndecodable { .. }
         ));
     }
@@ -2194,7 +2258,7 @@ mod tests {
         std::fs::set_permissions(&input, std::fs::Permissions::from_mode(0o000)).unwrap();
         let output = dir.path().join("out");
 
-        let result = run(&input, &output, false);
+        let result = run(&input, Some(output.as_path()), None, false);
         // Restore before any assertion can panic, so the tempdir can clean itself up.
         std::fs::set_permissions(&input, std::fs::Permissions::from_mode(0o755)).unwrap();
 
@@ -2217,7 +2281,7 @@ mod tests {
         std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000)).unwrap();
         let output = dir.path().join("out");
 
-        let result = run(&input, &output, false);
+        let result = run(&input, Some(output.as_path()), None, false);
         // Restore before any assertion can panic, so the tempdir can clean itself up.
         std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o644)).unwrap();
 
@@ -2304,7 +2368,7 @@ mod tests {
         std::fs::write(input.join("castle a.png"), png_bytes(W, H, [1, 0, 0])).unwrap();
         std::fs::write(input.join("castle_a.png"), png_bytes(W, H, [0, 1, 0])).unwrap();
         let output = dir.path().join("out");
-        run(&input, &output, false).unwrap();
+        run(&input, Some(output.as_path()), None, false).unwrap();
         crate::validate::run(&output).unwrap();
         let toml = std::fs::read_to_string(output.join("theme.toml")).unwrap();
         assert!(toml.contains("castle_a = { image"), "{toml}");
@@ -2316,6 +2380,83 @@ mod tests {
     #[test]
     fn input_stem_falls_back_to_theme_for_a_path_with_no_file_stem() {
         assert_eq!(input_stem(Path::new("/")), "theme");
+    }
+
+    #[test]
+    fn input_stem_falls_back_to_theme_when_the_stem_is_double_dot() {
+        // `Path::file_stem` of a final component "..." is "..": the
+        // component starts with '.' and has other '.'s within it, so the
+        // stem is everything before the final '.'.
+        assert_eq!(input_stem(Path::new("x/...")), "theme");
+    }
+
+    #[test]
+    fn input_stem_falls_back_to_theme_when_the_stem_is_a_single_dot() {
+        // `Path::file_stem` of a final component "..foo" is ".": same rule
+        // as above, split before the final '.'.
+        assert_eq!(input_stem(Path::new("x/..foo")), "theme");
+    }
+
+    // Unix-only: `\` is a path separator on Windows, so there
+    // `file_stem("a\b")` is "b" — no backslash, so the guard's backslash
+    // branch is unreachable and this scenario cannot arise. On Unix `\` is
+    // an ordinary filename character, so the whole component "a\b" (no
+    // embedded '.') is the file stem verbatim and must fall back to "theme".
+    #[cfg(unix)]
+    #[test]
+    fn input_stem_falls_back_to_theme_when_the_stem_contains_a_backslash() {
+        assert_eq!(input_stem(Path::new("a\\b")), "theme");
+    }
+
+    // -- name and output-dir resolution --
+
+    #[test]
+    fn theme_name_returns_the_given_name_when_some() {
+        assert_eq!(theme_name(Some("winter"), Path::new("/ignored")), "winter");
+    }
+
+    #[test]
+    fn theme_name_falls_back_to_the_input_stem_when_none() {
+        assert_eq!(theme_name(None, Path::new("/some/CARDS.DLL")), "CARDS");
+    }
+
+    #[test]
+    fn resolve_output_dir_returns_the_explicit_output_and_ignores_the_themes_dir() {
+        let output = Path::new("/explicit/out");
+        // `themes_dir` is populated but must still be ignored: `-o` always wins.
+        let themes_dir = Some(PathBuf::from(
+            "/home/user/.local/share/classic-solitair/themes",
+        ));
+        assert_eq!(
+            resolve_output_dir(Some(output), "winter", themes_dir).unwrap(),
+            output
+        );
+    }
+
+    #[test]
+    fn resolve_output_dir_returns_the_explicit_output_when_themes_dir_is_none() {
+        let output = Path::new("/explicit/out");
+        assert_eq!(
+            resolve_output_dir(Some(output), "winter", None).unwrap(),
+            output
+        );
+    }
+
+    #[test]
+    fn resolve_output_dir_joins_the_themes_dir_with_the_name_when_output_is_none() {
+        let themes_dir = PathBuf::from("/home/user/.local/share/classic-solitair/themes");
+        assert_eq!(
+            resolve_output_dir(None, "winter", Some(themes_dir.clone())).unwrap(),
+            themes_dir.join("winter")
+        );
+    }
+
+    #[test]
+    fn resolve_output_dir_errors_when_output_is_none_and_the_themes_dir_is_unresolved() {
+        assert!(matches!(
+            resolve_output_dir(None, "winter", None).unwrap_err(),
+            ExtractError::ThemeDirUnresolved
+        ));
     }
 
     #[test]
@@ -2407,6 +2548,7 @@ mod tests {
             ExtractError::OutputNotEmpty {
                 path: "p".to_owned(),
             },
+            ExtractError::ThemeDirUnresolved,
             ExtractError::OutputUnwritable {
                 path: "p".to_owned(),
                 message: "m".to_owned(),

@@ -176,15 +176,19 @@ for a panic or an unchecked index.
 
 The asset extraction and theme authoring CLI. Subcommands:
 
-- `extract <sol.exe | cards.dll | dir-of-bitmaps> -o <theme-dir> [--animate]` —
-  pull card bitmaps from your own local Windows assets into a
-  `render_mode = "png"` theme. **Output is for your local use only — the
-  original artwork must never be redistributed or committed** (the tool reads
-  local files only; it never downloads or ships them). `--animate`
-  reconstructs the four animated card backs from the resource file's own
-  overlay sprites; it takes a resource input only, and is a usage error on a
-  loose directory, which already packs frame-numbered files into strips
-  itself.
+- `extract <sol.exe | cards.dll | dir-of-bitmaps> [-o <theme-dir>] [--name
+  <name>] [--animate]` — pull card bitmaps from your own local Windows
+  assets into a `render_mode = "png"` theme. **Output is for your local use
+  only — the original artwork must never be redistributed or committed**
+  (the tool reads local files only; it never downloads or ships them).
+  With no `-o`/`--output`, the theme is written to the per-user themes
+  directory as `<data>/themes/<name>` and is immediately selectable
+  in-game. `--name` sets the theme's name and, when `-o` is omitted, its
+  folder under the themes directory (default: the input file's stem).
+  `--animate` reconstructs the four animated card backs from the resource
+  file's own overlay sprites; it takes a resource input only, and is a
+  usage error on a loose directory, which already packs frame-numbered
+  files into strips itself.
 - `validate <theme>` — lint a theme package against the theme format rules;
   non-zero exit on failure.
 - `pack-strip <frame files…> -o <strip.png> --fps <n>` — pack loose frames into

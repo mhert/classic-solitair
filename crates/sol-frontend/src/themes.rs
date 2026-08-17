@@ -60,9 +60,7 @@ pub enum ThemeLookupError {
 /// The user theme directory, `<data>/themes`, next to the autosave.
 #[must_use]
 pub fn user_theme_dir() -> Option<PathBuf> {
-    sol_session::paths::default_data_dir()
-        .ok()
-        .map(|dir| dir.join("themes"))
+    sol_session::paths::theme_dir().ok()
 }
 
 /// The in-tree default theme during development, resolved relative to

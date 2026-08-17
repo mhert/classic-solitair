@@ -16,6 +16,9 @@ const AUTOSAVE_FILE_NAME: &str = "autosave.json";
 /// The settings file's name within [`default_data_dir`].
 const SETTINGS_FILE_NAME: &str = "settings.json";
 
+/// The themes directory's name within [`default_data_dir`].
+const THEMES_DIR_NAME: &str = "themes";
+
 /// Resolves this platform's data directory for classic-solitair —
 /// `ProjectDirs::from("", "", "classic-solitair")` (no qualifier or
 /// organization: a single, non-corporate application), data dir. Pure
@@ -72,6 +75,23 @@ pub fn settings_path() -> Result<PathBuf, StorageError> {
     Ok(default_data_dir()?.join(SETTINGS_FILE_NAME))
 }
 
+/// The user themes directory's path: [`default_data_dir`] joined with
+/// `themes`.
+///
+/// # Errors
+///
+/// Returns [`StorageError::NoHomeDirectory`] under the same conditions as
+/// [`default_data_dir`].
+///
+/// ```no_run
+/// let path = sol_session::paths::theme_dir()?;
+/// assert!(path.ends_with("themes"));
+/// # Ok::<(), sol_session::StorageError>(())
+/// ```
+pub fn theme_dir() -> Result<PathBuf, StorageError> {
+    Ok(default_data_dir()?.join(THEMES_DIR_NAME))
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -102,5 +122,15 @@ mod tests {
 
         assert_eq!(settings, data_dir.join("settings.json"));
         assert!(settings.ends_with("settings.json"));
+    }
+
+    #[test]
+    fn theme_dir_is_the_data_dir_joined_with_themes() {
+        let data_dir = default_data_dir().unwrap();
+
+        let themes = theme_dir().unwrap();
+
+        assert_eq!(themes, data_dir.join("themes"));
+        assert!(themes.ends_with("themes"));
     }
 }

@@ -72,15 +72,73 @@ pub struct ExtractArgs {
     /// `.bmp`/`.png` bitmaps. Sniffed by content, not by extension.
     pub input: PathBuf,
     /// Directory to write the generated theme into — created if absent,
-    /// refused if it already exists and is not empty.
+    /// refused if it already exists and is not empty. Defaults to
+    /// `<themes-dir>/<name>` (the per-user themes directory), so the theme
+    /// is immediately selectable in-game.
     #[arg(short = 'o', long = "output")]
-    pub output: PathBuf,
+    pub output: Option<PathBuf>,
+    /// Sets the theme's name and, when `--output` is omitted, the theme's
+    /// folder under the themes directory. Defaults to the input file's
+    /// stem. Must be a single folder name, not a path.
+    #[arg(long, value_parser = parse_theme_name)]
+    pub name: Option<String>,
     /// Reconstructs the original's animated card backs from the file's own
     /// overlay-sprite resources (resource inputs only; frames derived from
     /// the original's animation code; the existing local-use notice covers
     /// the strips).
     #[arg(long)]
     pub animate: bool,
+}
+
+/// Validates a `--name` value: must be a single folder name, not empty, not
+/// `.`/`..`, and free of path separators.
+///
+/// # Errors
+///
+/// Returns an error message (turned into a clap usage error, exit code 2)
+/// when `raw` is empty, is `.` or `..`, or contains `/` or `\`.
+fn parse_theme_name(raw: &str) -> Result<String, String> {
+    if raw.is_empty() || raw == "." || raw == ".." || raw.contains(['/', '\\']) {
+        return Err(format!(
+            "invalid theme name {raw:?}: must be a single folder name, not a path"
+        ));
+    }
+    Ok(raw.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_theme_name;
+
+    #[test]
+    fn accepts_a_plain_name() {
+        assert_eq!(parse_theme_name("winter").as_deref(), Ok("winter"));
+    }
+
+    #[test]
+    fn rejects_an_empty_name() {
+        assert!(parse_theme_name("").is_err());
+    }
+
+    #[test]
+    fn rejects_a_forward_slash() {
+        assert!(parse_theme_name("a/b").is_err());
+    }
+
+    #[test]
+    fn rejects_a_backslash() {
+        assert!(parse_theme_name("a\\b").is_err());
+    }
+
+    #[test]
+    fn rejects_a_single_dot() {
+        assert!(parse_theme_name(".").is_err());
+    }
+
+    #[test]
+    fn rejects_a_double_dot() {
+        assert!(parse_theme_name("..").is_err());
+    }
 }
 
 /// Arguments for `soltool validate`.
