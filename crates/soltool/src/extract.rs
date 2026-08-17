@@ -2299,15 +2299,16 @@ mod tests {
         let input = dir.path().join("dup");
         std::fs::create_dir(&input).unwrap();
         write_canonical_faces(&input);
-        // Distinct files on a case-sensitive fs, all sanitizing to "castle".
-        std::fs::write(input.join("castle.png"), png_bytes(W, H, [1, 0, 0])).unwrap();
-        std::fs::write(input.join("Castle.png"), png_bytes(W, H, [0, 1, 0])).unwrap();
+        // Distinct files on any filesystem (space vs underscore) that both
+        // sanitize to the same back name "castle_a".
+        std::fs::write(input.join("castle a.png"), png_bytes(W, H, [1, 0, 0])).unwrap();
+        std::fs::write(input.join("castle_a.png"), png_bytes(W, H, [0, 1, 0])).unwrap();
         let output = dir.path().join("out");
         run(&input, &output, false).unwrap();
         crate::validate::run(&output).unwrap();
         let toml = std::fs::read_to_string(output.join("theme.toml")).unwrap();
-        assert!(toml.contains("castle = { image"), "{toml}");
-        assert!(toml.contains("castle_2 = { image"), "{toml}");
+        assert!(toml.contains("castle_a = { image"), "{toml}");
+        assert!(toml.contains("castle_a_2 = { image"), "{toml}");
     }
 
     // -- write helpers --

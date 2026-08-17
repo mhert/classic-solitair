@@ -426,8 +426,8 @@ mod tests {
         assert_eq!(
             snippet,
             format!(
-                "robot = {{ image = \"{}\", frames = 2, fps = 2 }}",
-                output.display()
+                "robot = {{ image = {}, frames = 2, fps = 2 }}",
+                crate::manifest_writer::toml_string(&output.display().to_string())
             )
         );
     }
