@@ -1,0 +1,32 @@
+# This project's dependency graph is checked with `cargo deny check`.
+# https://embarkstudios.github.io/cargo-deny/
+
+[advisories]
+version = 2                              # any advisory = error
+
+[licenses]
+version = 2
+allow = [
+    "GPL-3.0",
+    # This workspace's own crates declare "GPL-3.0-or-later" (workspace.package.license);
+    # a distinct SPDX identifier from "GPL-3.0" above, needed so our own crates pass this
+    # same check rather than just third-party dependencies.
+    "GPL-3.0-or-later",
+    "MIT",
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "Unicode-3.0",
+    "Zlib",
+]
+
+[bans]
+multiple-versions = "warn"               # tighten to "deny" once the tree is clean
+
+[[bans.deny]]
+# This project is sync-only by design; an async runtime creeping into the
+# dependency tree is a design violation, not a preference.
+name = "tokio"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

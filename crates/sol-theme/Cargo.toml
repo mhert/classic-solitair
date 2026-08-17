@@ -1,0 +1,11 @@
+[package]
+name = "sol-theme"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Theme package format: manifest parsing, asset loading, validation."
+
+[lints]
+workspace = true

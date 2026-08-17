@@ -1,0 +1,11 @@
+[package]
+name = "sol-shell"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Minimal winit dev shell to run presenter and renderer before real frontends."
+
+[lints]
+workspace = true

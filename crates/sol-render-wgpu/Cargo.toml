@@ -1,0 +1,11 @@
+[package]
+name = "sol-render-wgpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Batched wgpu sprite renderer for the playfield."
+
+[lints]
+workspace = true

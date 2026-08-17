@@ -1,0 +1,11 @@
+[package]
+name = "sol-presenter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Layout, hit-testing, drag logic, and animation timing → sprite display lists."
+
+[lints]
+workspace = true

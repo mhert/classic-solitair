@@ -1,0 +1,11 @@
+[package]
+name = "sol-win32"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Windows frontend: native-windows-gui chrome, Win32 menu bar, wgpu playfield."
+
+[lints]
+workspace = true

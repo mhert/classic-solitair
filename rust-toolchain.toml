@@ -1,0 +1,3 @@
+[toolchain]
+channel = "1.94.0"            # pin a concrete stable; bump deliberately, in its own commit
+components = ["rustfmt", "clippy"]

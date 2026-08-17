@@ -1,0 +1,11 @@
+[package]
+name = "sol-session"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Cross-game session state: Vegas bankroll, options, versioned save/load."
+
+[lints]
+workspace = true

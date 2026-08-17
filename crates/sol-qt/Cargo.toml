@@ -1,0 +1,11 @@
+[package]
+name = "sol-qt"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Linux frontend: Qt6/QML chrome via cxx-qt, wgpu playfield."
+
+[lints]
+workspace = true
